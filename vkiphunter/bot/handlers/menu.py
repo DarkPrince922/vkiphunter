@@ -7,10 +7,12 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+from html import escape
+
 from ...cloud import CloudError
 from .. import formatting as fmt
 from ..context import AppContext
-from ..keyboards import back_button, main_menu
+from ..keyboards import back_button, log_menu, main_menu
 from ..ui import show
 
 
@@ -109,6 +111,55 @@ async def _cloud_check(event: Event, ctx: AppContext) -> None:
     await show(event, fmt.cloud_info_text(info, network), back_button())
 
 
+LOG_LINES = 25
+
+
+def _tail(path, lines: int) -> str:
+    """Последние строки лога. Файл читаем с конца, чтобы не тянуть мегабайты."""
+    try:
+        with open(path, "rb") as handle:
+            handle.seek(0, 2)
+            size = handle.tell()
+            chunk = min(size, 64 * 1024)
+            handle.seek(size - chunk)
+            text = handle.read().decode("utf-8", errors="replace")
+    except FileNotFoundError:
+        return ""
+    except OSError as exc:
+        return f"не прочитать лог: {exc}"
+    return "\n".join(text.splitlines()[-lines:])
+
+
+async def _show_log(event: Event, ctx: AppContext) -> None:
+    path = ctx.settings.log_file
+    tail = _tail(path, LOG_LINES)
+    if not tail:
+        await show(
+            event,
+            f"Лог пуст или не найден: <code>{escape(str(path))}</code>",
+            back_button(),
+        )
+        return
+
+    # 4096 — предел сообщения Telegram, оставляем запас на разметку.
+    body = escape(tail)[-3500:]
+    await show(
+        event,
+        f"📄 <b>Последние строки лога</b>\n<code>{escape(str(path))}</code>\n\n"
+        f"<pre>{body}</pre>",
+        log_menu(),
+    )
+
+
+async def cmd_log(message: Message, ctx: AppContext) -> None:
+    await _show_log(message, ctx)
+
+
+async def cb_log(callback: CallbackQuery, ctx: AppContext) -> None:
+    await callback.answer("Читаю лог…")
+    await _show_log(callback, ctx)
+
+
 async def cmd_whoami(message: Message) -> None:
     user = message.from_user
     await message.answer(
@@ -135,10 +186,12 @@ def build_router() -> Router:
     router.message.register(cmd_ips, Command("ips"))
     router.message.register(cmd_cloud, Command("cloud"))
     router.message.register(cmd_whoami, Command("whoami"))
+    router.message.register(cmd_log, Command("log", "logs"))
     router.callback_query.register(cb_menu, F.data.in_({"ui:menu", "ui:status"}))
     router.callback_query.register(cb_history, F.data == "ui:history")
     router.callback_query.register(cb_ips, F.data == "ui:ips")
     router.callback_query.register(cb_cloud, F.data == "ui:cloud")
     router.callback_query.register(cb_cancel, F.data == "ui:cancel")
     router.callback_query.register(cb_help, F.data == "ui:help")
+    router.callback_query.register(cb_log, F.data == "ui:log")
     return router

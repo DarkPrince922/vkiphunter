@@ -37,6 +37,7 @@ class Settings(BaseSettings):
         default=Path("data/credentials.json"), alias="CREDENTIALS_FILE"
     )
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+    log_file: Path = Field(default=Path("data/vkiphunter.log"), alias="LOG_FILE")
 
     # --- Режим без облака (демо/отладка) --------------------------------
     simulate: bool = Field(default=False, alias="SIMULATE")

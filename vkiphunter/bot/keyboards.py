@@ -30,7 +30,11 @@ def main_menu(
     kb.button(text="📈 Адреса", callback_data="ui:ips")
     kb.button(text="🎯 Диапазоны", callback_data="ui:targets")
     kb.button(text="⚙️ Настройки", callback_data="ui:settings")
-    kb.button(text="🔌 Порты", callback_data="ports:list")
+    kb.button(
+        text="🎈 Floating IP" if mode == MODE_FLOATING_IP else "🔌 Порты",
+        callback_data="ports:list",
+    )
+    kb.button(text="📄 Логи", callback_data="ui:log")
     kb.button(text="☁️ Проверка облака", callback_data="ui:cloud")
     kb.button(text="🔌 Доступы к облаку", callback_data="conn:menu")
     if has_found:
@@ -38,8 +42,17 @@ def main_menu(
             kb.button(text="🔗 Привязать найденный IP к ВМ", callback_data="fip:attach")
         else:
             kb.button(text="🖥 Создать ВМ на найденном IP", callback_data="vm:start")
-    kb.adjust(1, 2, 2, 2, 1, 1, 1)
+    kb.adjust(1, 2, 2, 2, 2, 1, 1)
     return kb.as_markup()
+
+
+def log_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data="ui:log")],
+            [InlineKeyboardButton(text="⬅️ Меню", callback_data="ui:menu")],
+        ]
+    )
 
 
 def back_button(target: str = "ui:menu") -> InlineKeyboardMarkup:
@@ -54,6 +67,7 @@ def settings_menu(settings: HuntSettings) -> InlineKeyboardMarkup:
         text=f"🧭 Способ: {MODE_TITLES[settings.mode]}", callback_data="set:mode"
     )
     kb.button(text=f"⏱ Интервал: {settings.interval} с", callback_data="set:interval")
+    kb.button(text=f"👥 Воркеров: {settings.workers}", callback_data="set:workers")
     kb.button(text=f"🌐 Сеть: {settings.network}", callback_data="set:network")
     kb.button(text=f"🏷 Префикс: {settings.prefix}", callback_data="set:prefix")
     kb.button(

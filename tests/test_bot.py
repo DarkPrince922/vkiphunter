@@ -20,6 +20,7 @@ def app(tmp_path, monkeypatch):
         BOT_TOKEN="42:TESTTOKENTESTTOKENTESTTOKENTESTTOKEN",
         ALLOWED_USER_IDS="7",
         STATE_FILE=str(tmp_path / "state.json"),
+        LOG_FILE=str(tmp_path / "vkiphunter.log"),
     )
     dp, ctx, notifier = build(settings)
     bot, session = make_bot()
@@ -313,3 +314,58 @@ async def test_attach_refuses_port_mode(app):
     )
     await feed(dp, bot, text_update("/attach"))
     assert "/vm" in session.last_text
+
+
+# --- воркеры, аккаунт и логи --------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_start_message_names_mode_account_and_workers(app):
+    dp, ctx, session, bot = app
+    ctx.state.settings.workers = 4
+    ctx.state.settings.max_attempts = 4
+
+    await feed(dp, bot, text_update("/hunt"))
+    await asyncio.wait_for(ctx.hunter._task, timeout=10)
+
+    start = next(t for t in session.texts if "Охота запущена" in t)
+    assert "Способ:" in start
+    assert "simulated" in start, "в сообщении должен быть виден аккаунт"
+    assert "Воркеров: <b>4</b>" in start
+
+
+@pytest.mark.asyncio
+async def test_status_shows_account_and_worker_numbers(app):
+    dp, ctx, session, bot = app
+    ctx.state.settings.workers = 3
+    ctx.state.settings.max_attempts = 6
+
+    await feed(dp, bot, text_update("/hunt"))
+    await asyncio.wait_for(ctx.hunter._task, timeout=10)
+    await feed(dp, bot, text_update("/status"))
+    assert "Аккаунт:" in session.last_text
+
+    await feed(dp, bot, text_update("/history"))
+    assert "[в1]" in session.last_text or "[в2]" in session.last_text
+
+
+@pytest.mark.asyncio
+async def test_log_command_reads_file(app, tmp_path):
+    dp, ctx, session, bot = app
+    ctx.settings.log_file.parent.mkdir(parents=True, exist_ok=True)
+    ctx.settings.log_file.write_text(
+        "2026-08-28 20:20:01 INFO vkiphunter.hunter: воркер 2 · mcs64 / owner · "
+        "161.104.107.234 · вне целевых диапазонов\n",
+        encoding="utf-8",
+    )
+
+    await feed(dp, bot, text_update("/log"))
+    assert "воркер 2" in session.last_text
+    assert "161.104.107.234" in session.last_text
+
+
+@pytest.mark.asyncio
+async def test_log_command_without_file(app):
+    dp, ctx, session, bot = app
+    await feed(dp, bot, text_update("/log"))
+    assert "Лог пуст" in session.last_text

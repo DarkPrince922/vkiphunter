@@ -7,6 +7,8 @@ import logging
 import re
 import signal
 import sys
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -44,16 +46,29 @@ COMMANDS = [
     BotCommand(command="connect", description="Подключить VK Cloud"),
     BotCommand(command="disconnect", description="Забыть доступы к облаку"),
     BotCommand(command="cloud", description="Проверить доступ к облаку"),
+    BotCommand(command="log", description="Последние строки лога"),
     BotCommand(command="whoami", description="Мой Telegram ID"),
     BotCommand(command="help", description="Справка"),
 ]
 
 
-def setup_logging(level: str) -> None:
-    logging.basicConfig(
-        level=getattr(logging, level, logging.INFO),
-        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
-    )
+LOG_FORMAT = "%(asctime)s %(levelname)-7s %(name)s: %(message)s"
+LOG_MAX_BYTES = 5 * 1024 * 1024
+LOG_BACKUPS = 3
+
+
+def setup_logging(level: str, log_file: Path | None = None) -> None:
+    logging.basicConfig(level=getattr(logging, level, logging.INFO), format=LOG_FORMAT)
+
+    if log_file is not None:
+        # Отдельный файл нужен, чтобы /log в боте показывал историю даже
+        # там, где вывод процесса никто не собирает.
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(
+            log_file, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUPS, encoding="utf-8"
+        )
+        handler.setFormatter(logging.Formatter(LOG_FORMAT))
+        logging.getLogger().addHandler(handler)
     logging.getLogger("aiogram.event").setLevel(logging.WARNING)
     logging.getLogger("openstack").setLevel(logging.WARNING)
     logging.getLogger("keystoneauth").setLevel(logging.WARNING)
@@ -151,7 +166,7 @@ async def wait_for_telegram(bot: Bot, shutdown: asyncio.Event):
 
 async def run() -> None:
     settings = get_settings()
-    setup_logging(settings.log_level)
+    setup_logging(settings.log_level, settings.log_file)
 
     problem = settings.token_problem()
     if problem:

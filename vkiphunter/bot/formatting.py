@@ -11,6 +11,7 @@ from ..state import (
     MODE_FLOATING_IP,
     MODE_TITLES,
     OUTCOME_ERROR,
+    OUTCOME_QUOTA,
     OUTCOME_MATCH,
     OUTCOME_POOL_EMPTY,
     OUTCOME_REJECT,
@@ -21,6 +22,7 @@ from ..state import (
 )
 
 OUTCOME_ICON = {
+    OUTCOME_QUOTA: "🚧",
     OUTCOME_MATCH: "🎯",
     OUTCOME_REJECT: "❌",
     OUTCOME_POOL_EMPTY: "🕳",
@@ -28,6 +30,7 @@ OUTCOME_ICON = {
 }
 
 OUTCOME_TITLE = {
+    OUTCOME_QUOTA: "квота исчерпана",
     OUTCOME_MATCH: "попадание",
     OUTCOME_REJECT: "не тот пул",
     OUTCOME_POOL_EMPTY: "пул пуст (409)",
@@ -81,12 +84,21 @@ def status_text(state: AppState, hunter: Hunter, credentials=None) -> str:
     lines = [head]
     if credentials is not None and credentials.simulate:
         lines.append("<i>режим симуляции — реальные порты не создаются</i>")
+    workers = f" · воркеров: <b>{settings.workers}</b>" if settings.workers > 1 else ""
+    lines.append(f"Способ: <b>{MODE_TITLES[settings.mode]}</b>{workers}")
+    if hunter.account:
+        lines.append(f"Аккаунт: <code>{escape(hunter.account)}</code>")
     lines.append("")
 
     lines.append(
         f"Попыток: <b>{stats.attempts}</b> · "
         f"мимо: {stats.rejected} · 409: {stats.pool_empty} · ошибок: {stats.errors}"
     )
+    if stats.quota:
+        lines.append(
+            f"🚧 Квота исчерпана: <b>{stats.quota}</b> раз — "
+            "освободите выданные адреса или уменьшите число воркеров."
+        )
     if stats.started_at:
         lines.append(
             f"В работе: <b>{human_delta(time.time() - stats.started_at)}</b>"
@@ -114,8 +126,8 @@ def status_text(state: AppState, hunter: Hunter, credentials=None) -> str:
 
     lines.append("")
     lines.append(
-        f"<i>{MODE_TITLES[settings.mode]} · сеть {escape(settings.network)} · "
-        f"интервал {settings.interval} с · целей {len(settings.targets)}</i>"
+        f"<i>сеть {escape(settings.network)} · интервал {settings.interval} с · "
+        f"целей {len(settings.targets)}</i>"
     )
     return "\n".join(lines)
 
@@ -127,9 +139,15 @@ def attempt_line(attempt: Attempt) -> str:
         text = f"{icon} {clock(attempt.ts)} <code>{escape(attempt.ip)}</code> — {title}"
     else:
         text = f"{icon} {clock(attempt.ts)} — {title}"
-    show_detail = attempt.outcome in (OUTCOME_ERROR, OUTCOME_POOL_EMPTY) or (
+    show_detail = attempt.outcome in (
+        OUTCOME_ERROR,
+        OUTCOME_POOL_EMPTY,
+        OUTCOME_QUOTA,
+    ) or (
         "НЕ удалён" in attempt.detail
     )
+    if attempt.worker is not None:
+        text = text.replace(f"{icon} ", f"{icon} [в{attempt.worker}] ", 1)
     if attempt.detail and show_detail:
         text += f"\n    <i>{escape(attempt.detail[:200])}</i>"
     return text
@@ -187,6 +205,7 @@ def settings_text(settings: HuntSettings) -> str:
             "⚙️ <b>Настройки</b>",
             "",
             f"Способ добычи адреса: <b>{MODE_TITLES[settings.mode]}</b>",
+            f"Воркеров: <b>{settings.workers}</b>",
             f"Внешняя сеть: <code>{escape(settings.network)}</code>",
             f"Префикс портов: <code>{escape(settings.prefix)}</code>",
             f"Интервал между попытками: <b>{settings.interval} с</b>",
@@ -313,6 +332,7 @@ HELP = """<b>VK IP Hunter</b>
 /connect — подключить VK Cloud (спрошу доступы здесь же)
 /disconnect — забыть доступы к облаку
 /cloud — проверить доступ к облаку
+/log — последние строки лога
 /whoami — мой Telegram ID
 
 <b>Важно</b>

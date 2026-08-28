@@ -22,17 +22,31 @@ from .base import (
     NotFound,
     PoolExhausted,
     PortInfo,
+    QuotaExceeded,
     ServerBrief,
     ServerInfo,
 )
 
 log = logging.getLogger(__name__)
 
+_QUOTA_MARKERS = (
+    "quota exceeded",
+    "quotaexceeded",
+    "превышена квота",
+    "maximum number of ports exceeded",
+    "maximum number of floating ips exceeded",
+)
+
 _POOL_MARKERS = (
     "no more ip addresses available",
     "no more ip addresses",
     "ip address generation failure",
 )
+
+
+def _is_quota_exceeded(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return any(marker in text for marker in _QUOTA_MARKERS)
 
 
 def _is_pool_exhausted(exc: BaseException) -> bool:
@@ -46,6 +60,10 @@ def _translate(exc: BaseException) -> CloudError:
     import keystoneauth1.exceptions as ke
     import openstack.exceptions as oe
 
+    # Квоту проверяем раньше пула: оба отвечают 409, но ждать при
+    # исчерпанной квоте бессмысленно.
+    if _is_quota_exceeded(exc):
+        return QuotaExceeded(str(exc))
     if _is_pool_exhausted(exc):
         return PoolExhausted("409 No more IP addresses available")
 

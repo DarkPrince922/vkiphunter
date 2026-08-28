@@ -18,6 +18,14 @@ class PoolExhausted(CloudError):
     """409 No more IP addresses available — в пуле сейчас нет свободного адреса."""
 
 
+class QuotaExceeded(CloudError):
+    """Квота проекта исчерпана.
+
+    Внешне похоже на пустой пул — тоже 409, — но ждать бесполезно:
+    адреса не появятся, пока вы сами не освободите уже выданные.
+    """
+
+
 class NotFound(CloudError):
     """Ресурс не найден."""
 

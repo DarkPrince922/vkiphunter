@@ -15,6 +15,7 @@ from vkiphunter.hunter import EventKind, Hunter
 from vkiphunter.state import (
     MODE_FLOATING_IP,
     OUTCOME_POOL_EMPTY,
+    OUTCOME_QUOTA,
     OUTCOME_REJECT,
     Store,
 )
@@ -88,10 +89,11 @@ class ScriptedCloud(CloudBackend):
         raise NotImplementedError
 
 
-def make_hunter(tmp_path: Path, script, interval=0, mode=None):
+def make_hunter(tmp_path: Path, script, interval=0, mode=None, workers=1):
     store = Store(tmp_path / "state.json")
     store.load()
     store.state.settings.interval = interval
+    store.state.settings.workers = workers
     if mode:
         store.state.settings.mode = mode
     cloud = ScriptedCloud(script)
@@ -271,3 +273,61 @@ async def test_foreign_floating_ip_is_never_deleted(tmp_path):
 
     assert cloud.deleted == []
     assert "НЕ удалён" in store.state.attempts[-1].detail
+
+
+# --- параллельные воркеры -----------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_four_workers_share_the_queue_and_stop_on_match(tmp_path):
+    script = ["83.1.1.1"] * 20 + ["217.16.22.90"] + ["83.2.2.2"] * 20
+    hunter, store, cloud = make_hunter(tmp_path, script, workers=4)
+
+    await hunter.start()
+    await asyncio.wait_for(hunter._task, timeout=10)
+
+    found = store.state.last_found()
+    assert found.ip == "217.16.22.90"
+    # найденный ресурс не освобождён, остальные — освобождены
+    assert found.port_id not in cloud.deleted
+    assert store.state.stats.rejected == len(cloud.deleted)
+    # после находки воркеры не разгоняются дальше: хвост скрипта не выбран
+    assert store.state.stats.attempts <= 25
+
+
+@pytest.mark.asyncio
+async def test_workers_are_numbered_in_history(tmp_path):
+    hunter, store, _ = make_hunter(tmp_path, ["83.1.1.1"] * 8 + ["5.188.140.1"], workers=4)
+    await hunter.start()
+    await asyncio.wait_for(hunter._task, timeout=10)
+
+    workers = {a.worker for a in store.state.attempts}
+    assert workers == {0, 1, 2, 3}, "в истории должно быть видно, чей это запрос"
+
+
+@pytest.mark.asyncio
+async def test_parallel_labels_never_collide(tmp_path):
+    """Метки ресурсов уникальны — иначе не отличить, чей ресурс подбирать."""
+    hunter, store, cloud = make_hunter(tmp_path, ["83.1.1.1"] * 12 + ["217.16.16.1"], workers=4)
+    await hunter.start()
+    await asyncio.wait_for(hunter._task, timeout=10)
+
+    labels = [getattr(c, "name", None) or c.description for c in cloud.created]
+    assert len(labels) == len(set(labels))
+    assert all(label.startswith("vk-direct-probe-") for label in labels)
+
+
+@pytest.mark.asyncio
+async def test_quota_is_not_confused_with_empty_pool(tmp_path):
+    from vkiphunter.cloud import QuotaExceeded
+
+    hunter, store, _ = make_hunter(
+        tmp_path,
+        [QuotaExceeded("409 Quota exceeded for resources: ['floatingip']"), "5.188.140.2"],
+    )
+    await hunter.start()
+    await asyncio.wait_for(hunter._task, timeout=5)
+
+    assert store.state.attempts[0].outcome == OUTCOME_QUOTA
+    assert store.state.stats.quota == 1
+    assert store.state.stats.pool_empty == 0

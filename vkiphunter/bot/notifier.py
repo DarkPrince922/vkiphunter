@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import logging
+from html import escape
 from collections.abc import Callable
 from typing import Any
 
@@ -15,7 +16,7 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 from ..hunter import EventKind, Hunter, HunterEvent
-from ..state import OUTCOME_ERROR, Store
+from ..state import MODE_TITLES, OUTCOME_ERROR, OUTCOME_QUOTA, Store
 from . import formatting as fmt
 from .keyboards import found_actions, main_menu
 
@@ -90,7 +91,18 @@ class Notifier:
 
         if event.kind is EventKind.STARTED:
             self.forget_live()
-            await self.broadcast("▶️ <b>Охота запущена.</b>")
+            lines = [
+                "▶️ <b>Охота запущена.</b>",
+                f"Способ: <b>{MODE_TITLES[settings.mode]}</b>",
+            ]
+            if self.hunter.account:
+                lines.append(f"Аккаунт: <code>{escape(self.hunter.account)}</code>")
+            if settings.workers > 1:
+                lines.append(
+                    f"Воркеров: <b>{settings.workers}</b> — попытка примерно "
+                    f"каждые {max(1, settings.interval // settings.workers)} с"
+                )
+            await self.broadcast("\n".join(lines))
             await self.refresh_live()
             return
 
@@ -99,7 +111,17 @@ class Notifier:
             attempt = event.attempt
             number = event.attempt_number
             report_every = max(1, settings.report_every)
-            if attempt and attempt.outcome == OUTCOME_ERROR and number == 1:
+            if attempt and attempt.outcome == OUTCOME_QUOTA:
+                # Ждать при исчерпанной квоте бесполезно — говорим сразу.
+                if self.store.state.stats.quota == 1:
+                    await self.broadcast(
+                        "🚧 <b>Квота проекта исчерпана</b>\n"
+                        f"<i>{escape(attempt.detail[:300])}</i>\n\n"
+                        "Новых адресов не будет, пока не освободите выданные: "
+                        "/ports → уборка. Либо уменьшите число воркеров "
+                        "в /settings."
+                    )
+            elif attempt and attempt.outcome == OUTCOME_ERROR and number == 1:
                 await self.broadcast(
                     "⚠️ <b>Ошибка на первой же попытке</b>\n"
                     + fmt.attempt_line(attempt)

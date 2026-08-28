@@ -22,6 +22,7 @@ from .base import (
     NotFound,
     PoolExhausted,
     PortInfo,
+    QuotaExceeded,
     ServerBrief,
     ServerInfo,
 )
@@ -148,6 +149,7 @@ __all__ = [
     "NotFound",
     "PoolExhausted",
     "PortInfo",
+    "QuotaExceeded",
     "ServerBrief",
     "ServerInfo",
     "build_backend",

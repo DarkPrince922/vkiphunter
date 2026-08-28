@@ -27,6 +27,7 @@ OUTCOME_MATCH = "match"
 OUTCOME_REJECT = "reject"
 OUTCOME_POOL_EMPTY = "pool_empty"
 OUTCOME_ERROR = "error"
+OUTCOME_QUOTA = "quota"
 
 
 @dataclass
@@ -37,6 +38,7 @@ class HuntSettings:
     network: str = "internet"
     prefix: str = "vk-direct-probe"
     interval: int = 90
+    workers: int = 1
     port_timeout: int = 120
     server_timeout: int = 1800
     targets: list[str] = field(default_factory=lambda: list(DEFAULT_TARGETS))
@@ -56,6 +58,8 @@ class Attempt:
     ip: str | None = None
     port_id: str | None = None
     detail: str = ""
+    worker: int | None = None
+    account: str = ""
 
 
 @dataclass
@@ -65,6 +69,7 @@ class Stats:
     matches: int = 0
     errors: int = 0
     pool_empty: int = 0
+    quota: int = 0
     started_at: float | None = None
     last_attempt_at: float | None = None
     seen_ips: dict[str, int] = field(default_factory=dict)
@@ -78,6 +83,8 @@ class Stats:
             self.rejected += 1
         elif attempt.outcome == OUTCOME_POOL_EMPTY:
             self.pool_empty += 1
+        elif attempt.outcome == OUTCOME_QUOTA:
+            self.quota += 1
         else:
             self.errors += 1
         if attempt.ip:
