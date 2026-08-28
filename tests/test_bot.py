@@ -692,3 +692,64 @@ def app_offline(tmp_path):
     ctx.bot = bot
     notifier.bot = bot
     return dp, ctx, session, bot
+
+
+# --- правка целей одной командой ----------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_targets_command_with_arguments_adds_them(app):
+    dp, ctx, session, bot = app
+    await feed(
+        dp,
+        bot,
+        text_update("/targets 94.100.176.0/20, 130.49.224.0/19 185.16.244.0/22"),
+    )
+
+    for cidr in ("94.100.176.0/20", "130.49.224.0/19", "185.16.244.0/22"):
+        assert cidr in ctx.state.settings.targets
+    assert "Добавлено: <b>3</b>" in "\n".join(session.texts)
+
+
+@pytest.mark.asyncio
+async def test_targets_command_without_arguments_shows_screen(app):
+    dp, ctx, session, bot = app
+    before = list(ctx.state.settings.targets)
+
+    await feed(dp, bot, text_update("/targets"))
+
+    assert ctx.state.settings.targets == before
+    assert "Целевые диапазоны" in session.last_text
+
+
+@pytest.mark.asyncio
+async def test_untarget_command(app):
+    dp, ctx, session, bot = app
+    await feed(dp, bot, text_update("/untarget 5.188.140.0/22, 217.16.24.0/22"))
+
+    assert "5.188.140.0/22" not in ctx.state.settings.targets
+    assert "217.16.24.0/22" not in ctx.state.settings.targets
+
+
+@pytest.mark.asyncio
+async def test_exclude_command(app):
+    dp, ctx, session, bot = app
+    await feed(dp, bot, text_update("/exclude 217.16.22.0/24"))
+
+    assert "217.16.22.0/24" in ctx.state.settings.excludes
+    # исключение приоритетнее цели
+    from vkiphunter.cidr import check_ip
+
+    decision = check_ip(
+        "217.16.22.90",
+        ctx.state.settings.targets,
+        ctx.state.settings.excludes,
+    )
+    assert not decision.accepted
+
+
+@pytest.mark.asyncio
+async def test_untarget_without_arguments_explains(app):
+    dp, ctx, session, bot = app
+    await feed(dp, bot, text_update("/untarget"))
+    assert "Укажите, что убрать" in session.last_text

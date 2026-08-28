@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from aiogram import F, Router
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
@@ -122,8 +122,39 @@ async def cb_settings(callback: CallbackQuery, ctx: AppContext) -> None:
     await render_settings(callback, ctx)
 
 
-async def cmd_targets(message: Message, ctx: AppContext) -> None:
+async def cmd_targets(
+    message: Message, ctx: AppContext, command: CommandObject
+) -> None:
+    """Без аргументов — экран, с аргументами — сразу добавить.
+
+        /targets 94.100.176.0/20, 130.49.224.0/19
+    """
+    if command.args:
+        await _add_to_list(message, ctx, "targets", command.args)
+        return
     await render_targets(message, ctx)
+
+
+async def cmd_untarget(
+    message: Message, ctx: AppContext, command: CommandObject
+) -> None:
+    if not command.args:
+        await message.answer(
+            "Укажите, что убрать:\n<code>/untarget 217.16.16.0/20</code>"
+        )
+        return
+    await _remove_from_list(message, ctx, "targets", command.args)
+
+
+async def cmd_exclude(
+    message: Message, ctx: AppContext, command: CommandObject
+) -> None:
+    if not command.args:
+        await message.answer(
+            "Укажите диапазоны-исключения:\n<code>/exclude 90.156.0.0/16</code>"
+        )
+        return
+    await _add_to_list(message, ctx, "excludes", command.args)
 
 
 async def cb_targets(callback: CallbackQuery, ctx: AppContext) -> None:
@@ -264,10 +295,23 @@ async def _apply_setting(
     await show(message, fmt.settings_text(settings), settings_menu(settings))
 
 
+async def _add_to_list(
+    message: Message, ctx: AppContext, list_name: str, raw: str
+) -> None:
+    """Добавить диапазоны и показать экран целей."""
+    await _apply_list(message, ctx, None, list_name, "add", raw)
+
+
+async def _remove_from_list(
+    message: Message, ctx: AppContext, list_name: str, raw: str
+) -> None:
+    await _apply_list(message, ctx, None, list_name, "del", raw)
+
+
 async def _apply_list(
     message: Message,
     ctx: AppContext,
-    state: FSMContext,
+    state: FSMContext | None,
     list_name: str,
     mode: str,
     raw: str,
@@ -342,7 +386,8 @@ async def _apply_list(
         text = "\n".join(lines)
 
     await ctx.store.save()
-    await state.clear()
+    if state is not None:
+        await state.clear()
     await message.answer(text)
     await render_targets(message, ctx)
 
@@ -351,6 +396,8 @@ def build_router() -> Router:
     router = Router(name="settings")
     router.message.register(cmd_settings, Command("settings"))
     router.message.register(cmd_targets, Command("targets"))
+    router.message.register(cmd_untarget, Command("untarget", "rmtarget"))
+    router.message.register(cmd_exclude, Command("exclude"))
     router.callback_query.register(cb_settings, F.data == "ui:settings")
     router.callback_query.register(cb_targets, F.data == "ui:targets")
     router.callback_query.register(cb_toggle_mode, F.data == "set:mode")

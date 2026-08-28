@@ -42,7 +42,7 @@ COMMANDS = [
     BotCommand(command="vm", description="Создать ВМ на найденном порту"),
     BotCommand(command="attach", description="Привязать floating IP к ВМ"),
     BotCommand(command="settings", description="Настройки цикла"),
-    BotCommand(command="targets", description="Целевые диапазоны"),
+    BotCommand(command="targets", description="Целевые диапазоны (можно списком)"),
     BotCommand(command="networks", description="Внешние сети и их пулы"),
     BotCommand(command="subnets", description="Выбрать подсети для охоты"),
     BotCommand(command="availability", description="Свободные адреса по пулам"),
