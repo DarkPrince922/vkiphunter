@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from pathlib import Path
 
@@ -127,6 +128,11 @@ class Settings(BaseSettings):
         problems: list[str] = []
         if not self.bot_token:
             problems.append("BOT_TOKEN не задан")
+        elif not re.fullmatch(r"\d+:[A-Za-z0-9_-]{30,}", self.bot_token):
+            problems.append(
+                "BOT_TOKEN не похож на токен от @BotFather "
+                "(ожидается вид 123456789:AA...)"
+            )
         if not self.admins:
             problems.append("ALLOWED_USER_IDS пуст — бот был бы открыт для всех")
         if not self.simulate and not self.cloud_configured:

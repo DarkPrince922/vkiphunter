@@ -8,6 +8,7 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramNetworkError, TelegramUnauthorizedError
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand
 
@@ -95,23 +96,32 @@ async def run() -> None:
     dp, ctx, notifier = build(settings)
 
     async def on_startup() -> None:
-        await ctx.bot.set_my_commands(COMMANDS)
         me = await ctx.bot.get_me()
+        try:
+            await ctx.bot.set_my_commands(COMMANDS)
+            await notifier.broadcast(
+                "♻️ <b>Бот перезапущен.</b> Охота не возобновляется автоматически — "
+                "нажмите «Запустить охоту», если нужно продолжить."
+            )
+        except TelegramNetworkError as exc:
+            # Сеть может подняться позже — polling переподключится сам.
+            log.warning("Telegram недоступен при старте: %s", exc)
         log.info(
             "бот @%s запущен; админов: %d; симуляция: %s",
             me.username,
             len(settings.admins),
             settings.simulate,
         )
-        await notifier.broadcast(
-            "♻️ <b>Бот перезапущен.</b> Охота не возобновляется автоматически — "
-            "нажмите «Запустить охоту», если нужно продолжить."
-        )
 
     dp.startup.register(on_startup)
 
     try:
         await dp.start_polling(ctx.bot, allowed_updates=dp.resolve_used_update_types())
+    except TelegramUnauthorizedError:
+        raise SystemExit(
+            "Telegram отклонил BOT_TOKEN. Проверьте значение в .env — "
+            "новый токен выдаёт @BotFather командой /token."
+        ) from None
     finally:
         log.info("останавливаюсь…")
         await ctx.hunter.stop()
