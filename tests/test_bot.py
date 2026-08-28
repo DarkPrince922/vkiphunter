@@ -583,3 +583,49 @@ async def test_stats_reset(app):
     assert ctx.state.stats.attempts == 0
     assert ctx.state.stats.seen_ips == {}
     assert ctx.state.attempts == []
+
+
+# --- массовый ввод целей ------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_targets_accept_pasted_list(app):
+    dp, ctx, session, bot = app
+    await feed(dp, bot, callback_update("tgt:add_target"))
+    await feed(
+        dp,
+        bot,
+        text_update("94.100.176.0/20, 130.49.224.0/19\n185.16.244.0/22"),
+    )
+
+    for cidr in ("94.100.176.0/20", "130.49.224.0/19", "185.16.244.0/22"):
+        assert cidr in ctx.state.settings.targets
+    assert "Добавлено: <b>3</b>" in "\n".join(session.texts)
+
+
+@pytest.mark.asyncio
+async def test_vk_preset_button(app):
+    dp, ctx, session, bot = app
+    await feed(dp, bot, callback_update("tgt:vk"))
+
+    from vkiphunter.cidr import VK_RANGES
+
+    # состав совпадает с пресетом; уже имевшийся 5.188.140.0/22 не задвоился
+    assert set(ctx.state.settings.targets) == set(VK_RANGES)
+    assert len(ctx.state.settings.targets) == len(VK_RANGES)
+    assert ctx.state.settings.targets[0] == "5.188.140.0/22"
+    assert "Диапазоны VK добавлены" in session.last_text
+    # исторические 217.16.* свернулись в 217.16.16.0/20
+    assert "217.16.16.0/21" not in ctx.state.settings.targets
+    assert "217.16.16.0/20" in ctx.state.settings.targets
+
+
+@pytest.mark.asyncio
+async def test_bulk_removal(app):
+    dp, ctx, session, bot = app
+    await feed(dp, bot, callback_update("tgt:del_target"))
+    await feed(dp, bot, text_update("5.188.140.0/22, 217.16.24.0/22"))
+
+    assert "5.188.140.0/22" not in ctx.state.settings.targets
+    assert "217.16.24.0/22" not in ctx.state.settings.targets
+    assert "Убрано: <b>2</b>" in "\n".join(session.texts)

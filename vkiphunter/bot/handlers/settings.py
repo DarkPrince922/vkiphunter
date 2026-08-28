@@ -8,7 +8,15 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
-from ...cidr import DEFAULT_EXCLUDES, DEFAULT_TARGETS, CidrError, parse_network
+from ...cidr import (
+    DEFAULT_EXCLUDES,
+    DEFAULT_TARGETS,
+    VK_RANGES,
+    CidrError,
+    merge_networks,
+    parse_network,
+    split_networks,
+)
 from ...state import MODE_FLOATING_IP, MODE_PORT, MODE_TITLES
 from .. import formatting as fmt
 from ..context import AppContext
@@ -41,10 +49,15 @@ TEXT_FIELDS: dict[str, str] = {
 }
 
 LIST_ACTIONS: dict[str, tuple[str, str, str]] = {
-    "add_target": ("targets", "add", "целевой диапазон, например <code>217.16.16.0/21</code>"),
-    "del_target": ("targets", "del", "какой целевой диапазон убрать"),
-    "add_exclude": ("excludes", "add", "диапазон-исключение"),
-    "del_exclude": ("excludes", "del", "какое исключение убрать"),
+    "add_target": (
+        "targets",
+        "add",
+        "целевые диапазоны — можно вставить сразу список через запятую "
+        "или с новой строки",
+    ),
+    "del_target": ("targets", "del", "какие целевые диапазоны убрать"),
+    "add_exclude": ("excludes", "add", "диапазоны-исключения, можно списком"),
+    "del_exclude": ("excludes", "del", "какие исключения убрать"),
 }
 
 
@@ -113,10 +126,30 @@ async def cb_targets_action(
     callback: CallbackQuery, ctx: AppContext, state: FSMContext
 ) -> None:
     action = (callback.data or "").split(":", 1)[1]
+    settings = ctx.state.settings
+
+    if action == "vk":
+        result = merge_networks(settings.targets, VK_RANGES)
+        settings.targets = result.final
+        await ctx.store.save()
+        await callback.answer(f"Добавлено: {len(result.added)}")
+
+        lines = [f"📋 <b>Диапазоны VK добавлены</b>", ""]
+        lines.append(f"Новых: <b>{len(result.added)}</b>")
+        if result.duplicates:
+            lines.append(f"Уже были: {len(result.duplicates)}")
+        if result.absorbed:
+            lines.append(
+                f"Свёрнуто в более широкие: {len(result.absorbed)} — "
+                + ", ".join(f"<code>{a}</code>" for a, _ in result.absorbed[:5])
+            )
+        lines.append(f"\nВсего целей: <b>{len(settings.targets)}</b>")
+        await show(callback, "\n".join(lines), targets_menu())
+        return
 
     if action == "reset":
-        ctx.state.settings.targets = list(DEFAULT_TARGETS)
-        ctx.state.settings.excludes = list(DEFAULT_EXCLUDES)
+        settings.targets = list(DEFAULT_TARGETS)
+        settings.excludes = list(DEFAULT_EXCLUDES)
         await ctx.store.save()
         await callback.answer("Списки сброшены к историческим")
         await render_targets(callback, ctx)
@@ -127,7 +160,7 @@ async def cb_targets_action(
         return
 
     list_name, mode, label = LIST_ACTIONS[action]
-    current = getattr(ctx.state.settings, list_name)
+    current = getattr(settings, list_name)
     listing = "\n".join(f"• <code>{c}</code>" for c in current) or "<i>пусто</i>"
 
     await state.set_state(Edit.value)
@@ -195,25 +228,72 @@ async def _apply_list(
 ) -> None:
     settings = ctx.state.settings
     current: list[str] = getattr(settings, list_name)
+    values = split_networks(raw)
 
-    try:
-        network = str(parse_network(raw))
-    except CidrError as exc:
-        await message.answer(f"❌ Не похоже на CIDR: {exc}\nПример: <code>217.16.16.0/21</code>")
+    if not values:
+        await message.answer("Не вижу ни одного диапазона. Пример: <code>217.16.16.0/20</code>")
         return
 
     if mode == "add":
-        if network in current:
-            await message.answer("Такой диапазон уже в списке.")
+        result = merge_networks(current, values)
+        if not result.added and result.invalid and not result.duplicates:
+            await message.answer(
+                "❌ Не похоже на CIDR: "
+                + ", ".join(f"<code>{v[:40]}</code>" for v in result.invalid[:5])
+                + "\nПример: <code>217.16.16.0/20</code>"
+            )
             return
-        current.append(network)
-        text = f"✅ Добавлено: <code>{network}</code>"
+
+        setattr(settings, list_name, result.final)
+        lines = [f"✅ Добавлено: <b>{len(result.added)}</b>"]
+        if result.added:
+            lines.append(", ".join(f"<code>{n}</code>" for n in result.added[:10]))
+            if len(result.added) > 10:
+                lines.append(f"<i>…и ещё {len(result.added) - 10}</i>")
+        if result.duplicates:
+            lines.append(f"Уже были: {len(result.duplicates)}")
+        if result.nested:
+            lines.append(
+                "Вложены в существующие и пропущены: "
+                + ", ".join(f"<code>{a}</code> ⊂ <code>{b}</code>" for a, b in result.nested[:5])
+            )
+        if result.absorbed:
+            lines.append(
+                "Свёрнуто в более широкие: "
+                + ", ".join(f"<code>{a}</code> ⊂ <code>{b}</code>" for a, b in result.absorbed[:5])
+            )
+        if result.invalid:
+            lines.append(
+                "Не разобрал: "
+                + ", ".join(f"<code>{v[:30]}</code>" for v in result.invalid[:5])
+            )
+        text = "\n".join(lines)
     else:
-        if network not in current:
-            await message.answer("Такого диапазона в списке нет.")
+        removed, missing, invalid = [], [], []
+        for value in values:
+            try:
+                network = str(parse_network(value))
+            except CidrError:
+                invalid.append(value)
+                continue
+            if network in current:
+                current.remove(network)
+                removed.append(network)
+            else:
+                missing.append(network)
+
+        if not removed and not missing:
+            await message.answer("Не разобрал ни одного диапазона.")
             return
-        current.remove(network)
-        text = f"✅ Убрано: <code>{network}</code>"
+
+        lines = [f"✅ Убрано: <b>{len(removed)}</b>"]
+        if removed:
+            lines.append(", ".join(f"<code>{n}</code>" for n in removed[:10]))
+        if missing:
+            lines.append(f"Не было в списке: {len(missing)}")
+        if invalid:
+            lines.append(f"Не разобрал: {len(invalid)}")
+        text = "\n".join(lines)
 
     await ctx.store.save()
     await state.clear()
