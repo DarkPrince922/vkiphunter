@@ -1,0 +1,19 @@
+# Автозапуск бота. Положить в /etc/systemd/system/vkiphunter.service,
+# затем: systemctl daemon-reload && systemctl enable --now vkiphunter
+[Unit]
+Description=VK IP Hunter Telegram bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/vkiphunter
+EnvironmentFile=/opt/vkiphunter/.env
+ExecStart=/opt/vkiphunter/.venv/bin/python -m vkiphunter
+Restart=always
+RestartSec=10
+# Состояние (найденные порты, статистика) лежит в data/
+StateDirectory=vkiphunter
+
+[Install]
+WantedBy=multi-user.target
