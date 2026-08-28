@@ -350,7 +350,7 @@ async def test_quota_is_not_confused_with_empty_pool(tmp_path):
 @pytest.mark.asyncio
 async def test_chosen_subnet_is_passed_to_the_cloud(tmp_path):
     hunter, store, cloud = make_hunter(tmp_path, ["217.16.22.90"])
-    store.state.settings.subnet_id = "s-2"
+    store.state.settings.subnets = [{"id": "s-2", "cidr": "217.16.16.0/20"}]
 
     await hunter.start()
     await asyncio.wait_for(hunter._task, timeout=5)
@@ -371,7 +371,62 @@ async def test_subnet_also_applies_to_floating_ip_mode(tmp_path):
     hunter, store, cloud = make_hunter(
         tmp_path, ["5.188.140.5"], mode=MODE_FLOATING_IP
     )
-    store.state.settings.subnet_id = "s-2"
+    store.state.settings.subnets = [{"id": "s-2", "cidr": "217.16.16.0/20"}]
     await hunter.start()
     await asyncio.wait_for(hunter._task, timeout=5)
     assert cloud.subnets_asked == ["s-2"]
+
+
+# --- раскладка подсетей по воркерам -------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_each_worker_gets_its_own_subnet(tmp_path):
+    """Четыре воркера на четыре подсети — каждый закреплён за своей."""
+    hunter, store, cloud = make_hunter(tmp_path, ["83.1.1.1"] * 40, workers=4)
+    store.state.settings.max_attempts = 12
+    store.state.settings.subnets = [
+        {"id": f"s-{i}", "cidr": f"10.{i}.0.0/16"} for i in range(4)
+    ]
+
+    await hunter.start()
+    await asyncio.wait_for(hunter._task, timeout=10)
+
+    by_worker: dict[int, set[str]] = {}
+    for attempt in store.state.attempts:
+        by_worker.setdefault(attempt.worker, set()).add(attempt.subnet)
+
+    assert len(by_worker) == 4
+    for subnets in by_worker.values():
+        assert len(subnets) == 1, "воркер не должен прыгать между подсетями"
+    # и все четыре подсети разобраны
+    assert len({next(iter(s)) for s in by_worker.values()}) == 4
+
+
+@pytest.mark.asyncio
+async def test_single_worker_cycles_through_subnets(tmp_path):
+    hunter, store, cloud = make_hunter(tmp_path, ["83.1.1.1"] * 40)
+    store.state.settings.max_attempts = 6
+    store.state.settings.subnets = [
+        {"id": f"s-{i}", "cidr": f"10.{i}.0.0/16"} for i in range(3)
+    ]
+
+    await hunter.start()
+    await asyncio.wait_for(hunter._task, timeout=10)
+
+    asked = cloud.subnets_asked
+    assert asked[:6] == ["s-0", "s-1", "s-2", "s-0", "s-1", "s-2"]
+
+
+@pytest.mark.asyncio
+async def test_two_workers_cover_all_four_subnets(tmp_path):
+    hunter, store, cloud = make_hunter(tmp_path, ["83.1.1.1"] * 40, workers=2)
+    store.state.settings.max_attempts = 8
+    store.state.settings.subnets = [
+        {"id": f"s-{i}", "cidr": f"10.{i}.0.0/16"} for i in range(4)
+    ]
+
+    await hunter.start()
+    await asyncio.wait_for(hunter._task, timeout=10)
+
+    assert set(cloud.subnets_asked) == {"s-0", "s-1", "s-2", "s-3"}

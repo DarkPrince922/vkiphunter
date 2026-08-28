@@ -71,7 +71,7 @@ def settings_menu(settings: HuntSettings) -> InlineKeyboardMarkup:
     kb.button(text=f"👥 Воркеров: {settings.workers}", callback_data="set:workers")
     kb.button(text=f"🌐 Сеть: {settings.network}", callback_data="set:network")
     kb.button(
-        text=f"🗺 Подсеть: {settings.subnet_label or 'любая'}",
+        text=f"🗺 Подсети: {settings.subnet_summary()}",
         callback_data="ui:subnets",
     )
     kb.button(text=f"🏷 Префикс: {settings.prefix}", callback_data="set:prefix")

@@ -159,13 +159,13 @@ class Hunter:
             workers = max(1, min(settings.workers, 16))
             log.info(
                 "старт охоты: %s · %s · воркеров %d · интервал %d с · сеть %s · "
-                "подсеть %s",
+                "подсети %s",
                 self.account or "аккаунт неизвестен",
                 MODE_TITLES.get(settings.mode, settings.mode),
                 workers,
                 settings.interval,
                 settings.network,
-                settings.subnet_label or "любая",
+                settings.subnet_summary(),
             )
 
             tasks = [
@@ -208,9 +208,23 @@ class Hunter:
             log.warning("не удалось определить аккаунт: %s", exc)
             return ""
 
+    def _subnet_for(self, settings: Any, worker: int, round_: int, workers: int):
+        """Какую подсеть просить этому воркеру на этом круге.
+
+        Шаг по числу воркеров: при четырёх воркерах и четырёх подсетях
+        каждый закрепляется за своей, при одном — обходит все по очереди,
+        при двух и трёх — вместе покрывают весь список.
+        """
+        subnets = settings.subnets
+        if not subnets:
+            return "", ""
+        chosen = subnets[(worker + round_ * workers) % len(subnets)]
+        return chosen.get("id", ""), chosen.get("cidr", "")
+
     async def _worker(self, index: int, total: int) -> bool:
         """Один охотник. Возвращает True, если упёрся в лимит попыток."""
         settings = self.store.state.settings
+        round_ = 0
 
         # Разводим старты по времени: четыре запроса в одну секунду — это
         # всплеск на API и лишний риск упереться в квоту.
@@ -227,7 +241,11 @@ class Hunter:
                 self.current_attempt -= 1
                 return True
 
-            attempt, found = await self._iteration()
+            subnet_id, subnet_cidr = self._subnet_for(settings, index, round_, total)
+            round_ += 1
+
+            attempt, found = await self._iteration(subnet_id)
+            attempt.subnet = subnet_cidr
             # Номер проставляем только в параллельном режиме — при одном
             # воркере метка была бы шумом.
             attempt.worker = index if total > 1 else None
@@ -236,9 +254,10 @@ class Hunter:
             await self.store.save()
 
             log.info(
-                "воркер %d · %s · %s · %s",
+                "воркер %d · %s · подсеть %s · %s · %s",
                 index,
                 self.account or "аккаунт?",
+                subnet_cidr or "любая",
                 attempt.ip or "без адреса",
                 attempt.detail or attempt.outcome,
             )
@@ -292,7 +311,7 @@ class Hunter:
         finally:
             self._next_at.pop(index, None)
 
-    async def _iteration(self) -> tuple[Attempt, FoundPort | None]:
+    async def _iteration(self, subnet_id: str = "") -> tuple[Attempt, FoundPort | None]:
         settings = self.store.state.settings
         # Хвост из случайных символов обязателен: несколько воркеров стартуют
         # в одну секунду, и метки не должны совпадать — иначе не отличить,
@@ -301,7 +320,7 @@ class Hunter:
         now = time.time()
 
         try:
-            allocation = await self._allocate(settings, label)
+            allocation = await self._allocate(settings, label, subnet_id)
         except PoolExhausted as exc:
             return Attempt(now, OUTCOME_POOL_EMPTY, detail=str(exc)), None
         except QuotaExceeded as exc:
@@ -360,15 +379,17 @@ class Hunter:
 
     # --- работа с ресурсом в зависимости от режима ----------------------
 
-    async def _allocate(self, settings: Any, label: str) -> Allocation:
+    async def _allocate(
+        self, settings: Any, label: str, subnet_id: str = ""
+    ) -> Allocation:
         if settings.mode == MODE_FLOATING_IP:
             fip = await self.cloud.create_floating_ip(
-                settings.network, label, settings.port_timeout, settings.subnet_id
+                settings.network, label, settings.port_timeout, subnet_id
             )
             return Allocation(fip.id, fip.ip, fip.description or label)
 
         port = await self.cloud.create_port(
-            settings.network, label, settings.port_timeout, settings.subnet_id
+            settings.network, label, settings.port_timeout, subnet_id
         )
         return Allocation(port.id, port.ip, port.name)
 

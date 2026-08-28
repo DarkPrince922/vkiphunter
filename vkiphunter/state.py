@@ -36,8 +36,10 @@ class HuntSettings:
 
     mode: str = MODE_PORT
     network: str = "internet"
-    subnet_id: str = ""      # пусто — любая подсеть внешней сети
-    subnet_label: str = ""   # человекочитаемая подпись выбранной подсети
+    #: Выбранные подсети внешней сети: [{"id": ..., "cidr": ...}].
+    #: Пусто — просить адрес из любой. Воркеры раскладываются по этому
+    #: списку, так что несколько пулов проверяются одновременно.
+    subnets: list[dict[str, str]] = field(default_factory=list)
     prefix: str = "vk-direct-probe"
     interval: int = 90
     workers: int = 1
@@ -50,6 +52,22 @@ class HuntSettings:
     volume_size: int = 10
     volume_type: str = ""
 
+    @property
+    def subnet_ids(self) -> list[str]:
+        return [s.get("id", "") for s in self.subnets if s.get("id")]
+
+    @property
+    def subnet_cidrs(self) -> list[str]:
+        return [s.get("cidr") or s.get("id", "") for s in self.subnets]
+
+    def subnet_summary(self) -> str:
+        if not self.subnets:
+            return "любая подсеть"
+        cidrs = self.subnet_cidrs
+        if len(cidrs) <= 3:
+            return ", ".join(cidrs)
+        return f"{', '.join(cidrs[:3])} и ещё {len(cidrs) - 3}"
+
 
 @dataclass
 class Attempt:
@@ -57,6 +75,7 @@ class Attempt:
 
     ts: float
     outcome: str
+    subnet: str = ""
     ip: str | None = None
     port_id: str | None = None
     detail: str = ""
@@ -158,13 +177,24 @@ class AppState:
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> AppState:
         return cls(
-            settings=_build(HuntSettings, raw.get("settings")),
+            settings=_build(HuntSettings, _migrate_settings(raw.get("settings"))),
             stats=_build(Stats, raw.get("stats")),
             attempts=[_build(Attempt, a) for a in raw.get("attempts") or []],
             found=[_build(FoundPort, f) for f in raw.get("found") or []],
             subscribers=list(raw.get("subscribers") or []),
             live_message=raw.get("live_message"),
         )
+
+
+def _migrate_settings(raw: Any) -> Any:
+    """Одна выбранная подсеть из прошлой версии превращается в список."""
+    if not isinstance(raw, dict) or raw.get("subnets"):
+        return raw
+    subnet_id = raw.get("subnet_id")
+    if subnet_id:
+        raw = dict(raw)
+        raw["subnets"] = [{"id": subnet_id, "cidr": raw.get("subnet_label", "")}]
+    return raw
 
 
 def _build(cls: type, raw: Any) -> Any:

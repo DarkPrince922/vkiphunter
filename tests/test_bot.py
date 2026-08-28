@@ -387,23 +387,46 @@ async def test_subnets_screen_marks_matching_pools(app):
 
 
 @pytest.mark.asyncio
-async def test_picking_subnet_is_saved(app):
+async def test_subnets_toggle_and_reset(app):
     dp, ctx, session, bot = app
-    await feed(dp, bot, callback_update("sub:pick:subnet-ext-3"))
+    await feed(dp, bot, callback_update("sub:tog:subnet-ext-3"))
+    assert ctx.state.settings.subnet_ids == ["subnet-ext-3"]
 
-    assert ctx.state.settings.subnet_id == "subnet-ext-3"
-    assert ctx.state.settings.subnet_label == "217.16.16.0/20"
-    assert "217.16.16.0/20" in session.last_text
+    await feed(dp, bot, callback_update("sub:tog:subnet-ext-4"))
+    assert ctx.state.settings.subnet_ids == ["subnet-ext-3", "subnet-ext-4"]
 
-    await feed(dp, bot, callback_update("sub:pick:any"))
-    assert ctx.state.settings.subnet_id == ""
+    # повторное нажатие снимает выбор
+    await feed(dp, bot, callback_update("sub:tog:subnet-ext-3"))
+    assert ctx.state.settings.subnet_ids == ["subnet-ext-4"]
+
+    await feed(dp, bot, callback_update("sub:none"))
+    assert ctx.state.settings.subnets == []
+
+
+@pytest.mark.asyncio
+async def test_select_all_matching_subnets(app):
+    dp, ctx, session, bot = app
+    ctx.state.settings.workers = 4
+
+    await feed(dp, bot, callback_update("sub:all"))
+
+    assert ctx.state.settings.subnet_cidrs == ["217.16.16.0/20", "5.188.140.0/22"]
+    assert "каждый стучится в свою" in session.last_text
 
 
 @pytest.mark.asyncio
 async def test_warns_when_chosen_subnet_misses_targets(app):
     dp, ctx, session, bot = app
-    await feed(dp, bot, callback_update("sub:pick:subnet-ext-1"))
-    assert "не пересекается" in session.last_text
+    from aiogram.methods import AnswerCallbackQuery
+
+    await feed(dp, bot, callback_update("sub:tog:subnet-ext-1"))
+
+    alerts = [
+        m.text
+        for m in session.requests
+        if isinstance(m, AnswerCallbackQuery) and m.text
+    ]
+    assert any("не пересекается с целями" in a for a in alerts)
 
 
 @pytest.mark.asyncio
@@ -419,7 +442,7 @@ async def test_chosen_subnet_reaches_the_cloud_from_the_bot(app):
     dp, ctx, session, bot = app
     ctx.state.settings.mode = "floatingip"
     ctx.state.settings.max_attempts = 6
-    await feed(dp, bot, callback_update("sub:pick:subnet-ext-3"))
+    await feed(dp, bot, callback_update("sub:tog:subnet-ext-3"))
 
     await feed(dp, bot, text_update("/hunt"))
     await asyncio.wait_for(ctx.hunter._task, timeout=10)

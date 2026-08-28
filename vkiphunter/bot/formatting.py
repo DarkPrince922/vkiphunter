@@ -119,15 +119,20 @@ def status_text(state: AppState, hunter: Hunter, credentials=None) -> str:
     if found:
         lines.append("")
         lines.append(found_block(found))
+        if len(state.found) > 1:
+            lines.append(
+                f"<i>Всего удержано целевых адресов: {len(state.found)} — "
+                "воркеры нашли несколько почти одновременно. Все сохранены "
+                "и защищены от уборки.</i>"
+            )
 
     if hunter.last_error:
         lines.append("")
         lines.append(f"⚠️ {escape(hunter.last_error)}")
 
     lines.append("")
-    subnet = settings.subnet_label or "любая подсеть"
     lines.append(
-        f"<i>сеть {escape(settings.network)} · {escape(subnet)} · "
+        f"<i>сеть {escape(settings.network)} · {escape(settings.subnet_summary())} · "
         f"интервал {settings.interval} с · целей {len(settings.targets)}</i>"
     )
     return "\n".join(lines)
@@ -149,6 +154,8 @@ def attempt_line(attempt: Attempt) -> str:
     )
     if attempt.worker is not None:
         text = text.replace(f"{icon} ", f"{icon} [в{attempt.worker}] ", 1)
+    if attempt.subnet:
+        text += f" · <code>{escape(attempt.subnet)}</code>"
     if attempt.detail and show_detail:
         text += f"\n    <i>{escape(attempt.detail[:200])}</i>"
     return text
@@ -208,7 +215,7 @@ def settings_text(settings: HuntSettings) -> str:
             f"Способ добычи адреса: <b>{MODE_TITLES[settings.mode]}</b>",
             f"Воркеров: <b>{settings.workers}</b>",
             f"Внешняя сеть: <code>{escape(settings.network)}</code>",
-            f"Подсеть: <code>{escape(settings.subnet_label or 'любая')}</code>",
+            f"Подсети: <code>{escape(settings.subnet_summary())}</code>",
             f"Префикс портов: <code>{escape(settings.prefix)}</code>",
             f"Интервал между попытками: <b>{settings.interval} с</b>",
             f"Тайм-аут создания порта: <b>{settings.port_timeout} с</b>",
