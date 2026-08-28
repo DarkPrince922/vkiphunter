@@ -123,10 +123,11 @@ def targets_menu() -> InlineKeyboardMarkup:
     kb.button(text="➖ Убрать цель", callback_data="tgt:del_target")
     kb.button(text="🚫 Добавить исключение", callback_data="tgt:add_exclude")
     kb.button(text="♻️ Убрать исключение", callback_data="tgt:del_exclude")
+    kb.button(text="🗺 Подсети под эти цели", callback_data="sub:all")
     kb.button(text="📋 Все диапазоны VK", callback_data="tgt:vk")
     kb.button(text="↩️ Сбросить к историческим", callback_data="tgt:reset")
     kb.button(text="⬅️ Меню", callback_data="ui:menu")
-    kb.adjust(2, 2, 1, 1, 1)
+    kb.adjust(2, 2, 1, 1, 1, 1)
     return kb.as_markup()
 
 

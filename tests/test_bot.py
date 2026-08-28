@@ -629,3 +629,66 @@ async def test_bulk_removal(app):
     assert "5.188.140.0/22" not in ctx.state.settings.targets
     assert "217.16.24.0/22" not in ctx.state.settings.targets
     assert "Убрано: <b>2</b>" in "\n".join(session.texts)
+
+
+# --- согласование целей и подсетей --------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_targets_change_suggests_updating_subnets(app):
+    dp, ctx, session, bot = app
+    await feed(dp, bot, callback_update("tgt:vk"))
+
+    assert "Подсети под эти цели" in session.last_text or (
+        "подходит подсетей" in session.last_text
+    )
+
+
+@pytest.mark.asyncio
+async def test_note_disappears_once_subnets_match(app):
+    dp, ctx, session, bot = app
+    await feed(dp, bot, callback_update("tgt:vk"))
+    assert "подходит подсетей" in session.last_text
+
+    await feed(dp, bot, callback_update("sub:all"))
+    await feed(dp, bot, text_update("/targets"))
+
+    assert "подходит подсетей" not in session.last_text
+    assert "Нажмите «Подсети под эти цели»" not in session.last_text
+
+
+@pytest.mark.asyncio
+async def test_note_warns_when_nothing_matches(app):
+    dp, ctx, session, bot = app
+    await feed(dp, bot, callback_update("tgt:del_target"))
+    await feed(dp, bot, text_update("5.188.140.0/22, 217.16.16.0/21, 217.16.24.0/22, 217.16.28.0/22"))
+    await feed(dp, bot, callback_update("tgt:add_target"))
+    await feed(dp, bot, text_update("203.0.113.0/24"))
+
+    assert "не подходит ни одна подсеть" in session.last_text
+
+
+@pytest.mark.asyncio
+async def test_note_is_silent_without_cloud(app_offline):
+    dp, ctx, session, bot = app_offline
+    await feed(dp, bot, text_update("/targets"))
+    assert "подходит подсетей" not in session.last_text
+
+
+@pytest.fixture
+def app_offline(tmp_path):
+    """Бот без подключённого облака — подсказка не должна ломать экран."""
+    settings = Settings(
+        _env_file=None,
+        SIMULATE="0",
+        BOT_TOKEN="42:TESTTOKENTESTTOKENTESTTOKENTESTTOKEN",
+        ALLOWED_USER_IDS="7",
+        STATE_FILE=str(tmp_path / "state.json"),
+        LOG_FILE=str(tmp_path / "vkiphunter.log"),
+        CREDENTIALS_FILE=str(tmp_path / "credentials.json"),
+    )
+    dp, ctx, notifier = build(settings)
+    bot, session = make_bot()
+    ctx.bot = bot
+    notifier.bot = bot
+    return dp, ctx, session, bot

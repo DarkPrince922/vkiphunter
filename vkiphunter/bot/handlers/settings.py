@@ -17,9 +17,11 @@ from ...cidr import (
     parse_network,
     split_networks,
 )
+from ...cidr import overlapping_target
 from ...state import MODE_FLOATING_IP, MODE_PORT, MODE_TITLES
 from .. import formatting as fmt
 from ..context import AppContext
+from ...cloud import CloudError
 from ..keyboards import cancel_input, settings_menu, targets_menu
 from ..ui import show
 
@@ -65,8 +67,51 @@ async def render_settings(event: Event, ctx: AppContext) -> None:
     await show(event, fmt.settings_text(ctx.state.settings), settings_menu(ctx.state.settings))
 
 
+async def subnet_note(ctx: AppContext) -> str:
+    """Подсказать, что выбор подсетей отстал от списка целей.
+
+    Цели изменились — значит, подходящих пулов могло стать больше или
+    меньше. Молча оставлять старый выбор нельзя: охота пойдёт не туда.
+    """
+    if not ctx.credentials.configured:
+        return ""
+
+    settings = ctx.state.settings
+    try:
+        from .subnets import collect_subnets
+
+        subnets, _ = await collect_subnets(ctx, settings.network)
+    except CloudError:
+        return ""
+
+    matching = {
+        s.id for s in subnets if overlapping_target(s.cidr, settings.targets)
+    }
+    chosen = set(settings.subnet_ids)
+
+    if not matching:
+        return (
+            "\n\n⚠️ Под эти цели в сети "
+            f"<code>{settings.network}</code> не подходит ни одна подсеть — "
+            "загляните в /networks."
+        )
+    if chosen == matching:
+        return ""
+    if not chosen:
+        return (
+            f"\n\n🎯 Под эти цели подходит подсетей: <b>{len(matching)}</b>, "
+            "а сейчас адрес просится из любой. Нажмите «Подсети под эти цели»."
+        )
+    return (
+        f"\n\n🎯 Подходящих подсетей: <b>{len(matching)}</b>, выбрано "
+        f"<b>{len(chosen)}</b>. Нажмите «Подсети под эти цели», чтобы "
+        "привести выбор в соответствие."
+    )
+
+
 async def render_targets(event: Event, ctx: AppContext) -> None:
-    await show(event, fmt.targets_text(ctx.state.settings), targets_menu())
+    text = fmt.targets_text(ctx.state.settings) + await subnet_note(ctx)
+    await show(event, text, targets_menu())
 
 
 async def cmd_settings(message: Message, ctx: AppContext) -> None:
@@ -144,6 +189,7 @@ async def cb_targets_action(
                 + ", ".join(f"<code>{a}</code>" for a, _ in result.absorbed[:5])
             )
         lines.append(f"\nВсего целей: <b>{len(settings.targets)}</b>")
+        lines.append(await subnet_note(ctx))
         await show(callback, "\n".join(lines), targets_menu())
         return
 
@@ -298,7 +344,7 @@ async def _apply_list(
     await ctx.store.save()
     await state.clear()
     await message.answer(text)
-    await show(message, fmt.targets_text(settings), targets_menu())
+    await render_targets(message, ctx)
 
 
 def build_router() -> Router:
