@@ -16,15 +16,28 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from ...cidr import overlapping_target
 from ...cloud import CloudError
+from ...cloud.base import SubnetInfo
 from ..context import AppContext
+from ..keyboards import back_button
 from ..ui import show
 
 Event = Message | CallbackQuery
 
 
+def rank_subnets(subnets, targets, chosen: set[str]):
+    """Сначала целевые и выбранные — длинный список обрезается снизу."""
+    return sorted(
+        subnets,
+        key=lambda s: (
+            overlapping_target(s.cidr, targets) is None and s.id not in chosen,
+            s.cidr,
+        ),
+    )
+
+
 def subnets_keyboard(subnets, targets, chosen: set[str]) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
-    for subnet in subnets[:20]:
+    for subnet in rank_subnets(subnets, targets, chosen)[:30]:
         hit = overlapping_target(subnet.cidr, targets)
         mark = "🎯 " if hit else ""
         tick = "✅ " if subnet.id in chosen else "▫️ "
@@ -70,10 +83,33 @@ def distribution_hint(chosen_count: int, workers: int) -> str:
     )
 
 
+async def collect_subnets(ctx: AppContext, network: str):
+    """Подсети из ``subnet list`` плюс те, что видны только в ip-availability.
+
+    Политика проекта может скрывать подсеть из списка, хотя IPAM из неё
+    выделяет адреса — такую тоже нужно давать выбрать.
+    """
+    subnets = list(await ctx.cloud.list_subnets(network))
+    known = {s.id for s in subnets}
+
+    try:
+        availability = await ctx.cloud.ip_availability(network)
+    except CloudError:
+        return subnets, {}
+
+    usage = {a.subnet_id: a for a in availability}
+    for row in availability:
+        if row.subnet_id and row.subnet_id not in known:
+            subnets.append(
+                SubnetInfo(id=row.subnet_id, name=row.name, cidr=row.cidr)
+            )
+    return subnets, usage
+
+
 async def _show_subnets(event: Event, ctx: AppContext) -> None:
     settings = ctx.state.settings
     try:
-        subnets = await ctx.cloud.list_subnets(settings.network)
+        subnets, usage = await collect_subnets(ctx, settings.network)
     except CloudError as exc:
         await show(event, f"❌ Не получить подсети:\n<code>{exc}</code>")
         return
@@ -92,16 +128,23 @@ async def _show_subnets(event: Event, ctx: AppContext) -> None:
         "по ним и будут проверять несколько пулов сразу.",
         "",
     ]
-    for subnet in subnets[:20]:
+    ranked = rank_subnets(subnets, settings.targets, chosen)
+    for subnet in ranked[:30]:
         hit = overlapping_target(subnet.cidr, settings.targets)
         mark = "🎯" if hit else "▫️"
         name = f" · {escape(subnet.name)}" if subnet.name else ""
         line = f"{mark} <code>{escape(subnet.cidr)}</code>{name}"
+        stat = usage.get(subnet.id)
+        if stat and stat.total:
+            line += f" · свободно <b>{stat.free}</b> из {stat.total}"
         if hit:
             line += f"\n    <i>пересекается с целью {escape(hit)}</i>"
         if subnet.id in chosen:
             line += "\n    <b>выбрана</b>"
         lines.append(line)
+
+    if len(ranked) > 30:
+        lines.append(f"<i>…и ещё {len(ranked) - 30} подсетей</i>")
 
     lines.append("")
     lines.append(f"<i>{distribution_hint(len(chosen), settings.workers)}</i>")
@@ -162,12 +205,20 @@ async def _show_networks(event: Event, ctx: AppContext) -> None:
         lines.append(f"{mark} <b>{escape(network.name)}</b>")
         if not network.subnets:
             lines.append("    <i>без подсетей</i>")
-        for subnet in network.subnets[:10]:
+        # Целевые — наверх: их прячет обрезка длинного списка.
+        ranked = sorted(
+            network.subnets,
+            key=lambda s: overlapping_target(s.cidr, settings.targets) is None,
+        )
+        shown = ranked[:14]
+        for subnet in shown:
             hit = overlapping_target(subnet.cidr, settings.targets)
             if hit:
                 hits.append(f"{network.name} → {subnet.cidr}")
             bullet = "🎯" if hit else "▫️"
             lines.append(f"    {bullet} <code>{escape(subnet.cidr)}</code>")
+        if len(ranked) > len(shown):
+            lines.append(f"    <i>…и ещё {len(ranked) - len(shown)} — все в /subnets</i>")
         lines.append("")
 
     if hits:
@@ -220,6 +271,82 @@ async def cb_pick_network(callback: CallbackQuery, ctx: AppContext) -> None:
     await _show_networks(callback, ctx)
 
 
+async def _show_availability(event: Event, ctx: AppContext) -> None:
+    settings = ctx.state.settings
+    try:
+        rows = await ctx.cloud.ip_availability(settings.network)
+    except CloudError as exc:
+        await show(
+            event,
+            f"❌ Занятость пулов недоступна:\n<code>{exc}</code>\n\n"
+            "<i>VK Cloud может закрывать этот вызов политикой — тогда "
+            "смотрите /subnets.</i>",
+            back_button(),
+        )
+        return
+
+    if not rows:
+        await show(event, "Облако не вернуло данных о занятости пулов.", back_button())
+        return
+
+    listed = {s.id for s in await ctx.cloud.list_subnets(settings.network)}
+    chosen = set(settings.subnet_ids)
+    ranked = sorted(
+        rows,
+        key=lambda r: (overlapping_target(r.cidr, settings.targets) is None, -r.free),
+    )
+
+    lines = [
+        f"📊 <b>Занятость пулов сети {escape(settings.network)}</b>",
+        "",
+    ]
+    for row in ranked[:25]:
+        hit = overlapping_target(row.cidr, settings.targets)
+        mark = "🎯" if hit else "▫️"
+        tick = " ✅" if row.subnet_id in chosen else ""
+        hidden = "" if row.subnet_id in listed else " · <i>скрыта из списка</i>"
+        lines.append(
+            f"{mark} <code>{escape(row.cidr)}</code>{tick}{hidden}\n"
+            f"    свободно <b>{row.free}</b> из {row.total}"
+        )
+
+    targets_free = sum(
+        r.free for r in rows if overlapping_target(r.cidr, settings.targets)
+    )
+    lines.append("")
+    if targets_free:
+        lines.append(
+            f"🎯 В целевых пулах свободно сейчас: <b>{targets_free}</b> адресов."
+        )
+    else:
+        lines.append(
+            "🎯 В целевых пулах сейчас <b>нет свободных адресов</b> — "
+            "поэтому и приходит 409. Это ровно тот случай, когда охота "
+            "ждёт освобождения: оставьте её работать."
+        )
+
+    await show(event, "\n".join(lines), availability_menu())
+
+
+def availability_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data="ui:avail")],
+            [InlineKeyboardButton(text="🗺 Выбрать подсети", callback_data="ui:subnets")],
+            [InlineKeyboardButton(text="⬅️ Меню", callback_data="ui:menu")],
+        ]
+    )
+
+
+async def cmd_availability(message: Message, ctx: AppContext) -> None:
+    await _show_availability(message, ctx)
+
+
+async def cb_availability(callback: CallbackQuery, ctx: AppContext) -> None:
+    await callback.answer("Спрашиваю облако…")
+    await _show_availability(callback, ctx)
+
+
 async def cmd_subnets(message: Message, ctx: AppContext) -> None:
     await _show_subnets(message, ctx)
 
@@ -234,7 +361,7 @@ async def cb_toggle(callback: CallbackQuery, ctx: AppContext) -> None:
     settings = ctx.state.settings
 
     try:
-        subnets = await ctx.cloud.list_subnets(settings.network)
+        subnets, _ = await collect_subnets(ctx, settings.network)
     except CloudError as exc:
         await show(callback, f"❌ Не получить подсети:\n<code>{exc}</code>")
         return
@@ -264,7 +391,7 @@ async def cb_toggle(callback: CallbackQuery, ctx: AppContext) -> None:
 async def cb_all(callback: CallbackQuery, ctx: AppContext) -> None:
     settings = ctx.state.settings
     try:
-        subnets = await ctx.cloud.list_subnets(settings.network)
+        subnets, _ = await collect_subnets(ctx, settings.network)
     except CloudError as exc:
         await show(callback, f"❌ Не получить подсети:\n<code>{exc}</code>")
         return
@@ -291,6 +418,8 @@ def build_router() -> Router:
     router = Router(name="subnets")
     router.message.register(cmd_subnets, Command("subnets", "pools"))
     router.message.register(cmd_networks, Command("networks", "nets"))
+    router.message.register(cmd_availability, Command("availability", "free"))
+    router.callback_query.register(cb_availability, F.data == "ui:avail")
     router.callback_query.register(cb_networks, F.data == "ui:networks")
     router.callback_query.register(cb_pick_network, F.data.startswith("net:pick:"))
     router.callback_query.register(cb_subnets, F.data == "ui:subnets")

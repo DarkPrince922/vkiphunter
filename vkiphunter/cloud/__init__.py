@@ -26,6 +26,7 @@ from .base import (
     QuotaExceeded,
     ServerBrief,
     ServerInfo,
+    SubnetAvailability,
     SubnetInfo,
 )
 
@@ -87,6 +88,9 @@ class CloudProxy(CloudBackend):
 
     async def list_networks(self) -> list[NetworkInfo]:
         return await (await self._current()).list_networks()
+
+    async def ip_availability(self, network: str) -> list[SubnetAvailability]:
+        return await (await self._current()).ip_availability(network)
 
     async def list_subnets(self, network: str) -> list[SubnetInfo]:
         return await (await self._current()).list_subnets(network)
@@ -165,6 +169,7 @@ __all__ = [
     "QuotaExceeded",
     "ServerBrief",
     "ServerInfo",
+    "SubnetAvailability",
     "SubnetInfo",
     "build_backend",
 ]

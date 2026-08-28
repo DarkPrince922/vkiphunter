@@ -30,6 +30,7 @@ def main_menu(
     kb.button(text="📈 Адреса", callback_data="ui:ips")
     kb.button(text="🎯 Диапазоны", callback_data="ui:targets")
     kb.button(text="🗺 Сети и пулы", callback_data="ui:networks")
+    kb.button(text="📊 Свободные адреса", callback_data="ui:avail")
     kb.button(text="⚙️ Настройки", callback_data="ui:settings")
     kb.button(
         text="🎈 Floating IP" if mode == MODE_FLOATING_IP else "🔌 Порты",
@@ -43,8 +44,21 @@ def main_menu(
             kb.button(text="🔗 Привязать найденный IP к ВМ", callback_data="fip:attach")
         else:
             kb.button(text="🖥 Создать ВМ на найденном IP", callback_data="vm:start")
-    kb.adjust(1, 2, 2, 2, 1, 2, 1, 1)
+    kb.adjust(1, 2, 2, 2, 2, 2, 1, 1)
     return kb.as_markup()
+
+
+def ips_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🧹 Сбросить статистику", callback_data="ui:reset_stats"
+                )
+            ],
+            [InlineKeyboardButton(text="⬅️ Меню", callback_data="ui:menu")],
+        ]
+    )
 
 
 def log_menu(verbose: bool = False) -> InlineKeyboardMarkup:

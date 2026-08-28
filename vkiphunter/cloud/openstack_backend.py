@@ -26,6 +26,7 @@ from .base import (
     QuotaExceeded,
     ServerBrief,
     ServerInfo,
+    SubnetAvailability,
     SubnetInfo,
 )
 
@@ -180,6 +181,33 @@ class OpenStackBackend(CloudBackend):
             return networks
 
         return await self._call(_list, timeout=180)
+
+    async def ip_availability(self, network: str) -> list[SubnetAvailability]:
+        """Сколько адресов занято в каждом пуле сети.
+
+        Показывает и те подсети, которых нет в ``subnet list``: их может
+        скрывать политика проекта, хотя IPAM из них выделяет.
+        """
+
+        def _availability(conn: Any) -> list[SubnetAvailability]:
+            net = conn.network.find_network(network, ignore_missing=True)
+            if net is None:
+                raise NotFound(f"внешняя сеть {network!r} не найдена")
+            report = conn.network.get_network_ip_availability(net.id)
+            rows = []
+            for item in report.subnet_ip_availability or []:
+                rows.append(
+                    SubnetAvailability(
+                        subnet_id=item.get("subnet_id", ""),
+                        name=item.get("subnet_name", "") or "",
+                        cidr=item.get("cidr", "") or "",
+                        total=int(item.get("total_ips") or 0),
+                        used=int(item.get("used_ips") or 0),
+                    )
+                )
+            return rows
+
+        return await self._call(_availability, timeout=120)
 
     async def list_subnets(self, network: str) -> list[SubnetInfo]:
         def _list(conn: Any) -> list[SubnetInfo]:
@@ -398,6 +426,7 @@ def _fip_info(fip: Any) -> FloatingIpInfo:
         id=fip.id,
         ip=fip.floating_ip_address,
         description=fip.description or "",
+        subnet_id=getattr(fip, "subnet_id", "") or "",
         status=fip.status or "",
         port_id=fip.port_id or "",
         created_at=str(fip.created_at or ""),
@@ -407,10 +436,14 @@ def _fip_info(fip: Any) -> FloatingIpInfo:
 def _port_info(port: Any) -> PortInfo:
     fixed = list(port.fixed_ips or [])
     ip = fixed[0].get("ip_address") if fixed else None
+    # subnet_id из ответа — единственный способ узнать подсеть, которую
+    # IPAM выбрал сам: в subnet list она может не показываться.
+    subnet_id = fixed[0].get("subnet_id", "") if fixed else ""
     return PortInfo(
         id=port.id,
         name=port.name or "",
         ip=ip,
+        subnet_id=subnet_id,
         network_id=port.network_id or "",
         status=port.status or "",
         device_id=port.device_id or "",

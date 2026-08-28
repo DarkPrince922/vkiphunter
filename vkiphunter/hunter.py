@@ -92,6 +92,9 @@ class Hunter:
         self.current_attempt = 0
         self.last_error: str = ""
         self.account: str = ""
+        #: Снимок счётчиков на старте — статистика показывается за запуск,
+        #: иначе цифры прошлых прогонов делают текущий нечитаемым.
+        self.run_baseline: dict[str, int] = {}
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
         self._found = asyncio.Event()
@@ -132,6 +135,7 @@ class Hunter:
         self.last_error = ""
         self.status = HunterStatus.RUNNING
         self.store.state.stats.started_at = time.time()
+        self.run_baseline = self.store.state.stats.counters()
         self._task = asyncio.create_task(self._run(), name="hunter")
         return True
 

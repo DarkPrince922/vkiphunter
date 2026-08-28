@@ -26,11 +26,16 @@ from .base import (
     ServerBrief,
     NetworkInfo,
     ServerInfo,
+    SubnetAvailability,
     SubnetInfo,
 )
 
 #: Подсети внешней сети: у настоящего проекта их тоже несколько,
 #: и без явного выбора адрес приходит из самой ёмкой.
+#: Подсеть, которой нет в subnet list, но из которой IPAM выделяет —
+#: так ведёт себя скрытая политикой подсеть в настоящем проекте.
+HIDDEN_SUBNET = ("subnet-hidden", "ext-hidden", "161.104.106.0/23")
+
 SUBNETS: tuple[tuple[str, str, str], ...] = (
     ("subnet-ext-1", "ext-net-01", "161.104.107.0/24"),
     ("subnet-ext-2", "ext-net-02", "83.166.240.0/20"),
@@ -84,6 +89,26 @@ class FakeCloud(CloudBackend):
     async def list_subnets(self, network: str) -> list[SubnetInfo]:
         await self._tick()
         return [SubnetInfo(id=i, name=name, cidr=cidr) for i, name, cidr in SUBNETS]
+
+    async def ip_availability(self, network: str) -> list[SubnetAvailability]:
+        await self._tick()
+        rows = [
+            SubnetAvailability(
+                subnet_id=i, name=name, cidr=cidr, total=1024, used=1024
+            )
+            for i, name, cidr in SUBNETS
+        ]
+        # Скрытая подсеть видна только здесь — и в ней есть свободные адреса.
+        rows.append(
+            SubnetAvailability(
+                subnet_id=HIDDEN_SUBNET[0],
+                name=HIDDEN_SUBNET[1],
+                cidr=HIDDEN_SUBNET[2],
+                total=512,
+                used=140,
+            )
+        )
+        return rows
 
     async def list_networks(self) -> list[NetworkInfo]:
         await self._tick()

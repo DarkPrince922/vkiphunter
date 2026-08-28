@@ -46,6 +46,7 @@ class PortInfo:
     id: str
     name: str
     ip: str | None
+    subnet_id: str = ""
     network_id: str = ""
     status: str = ""
     device_id: str = ""
@@ -60,6 +61,21 @@ class SubnetInfo:
     name: str
     cidr: str
     ip_version: int = 4
+
+
+@dataclass(slots=True)
+class SubnetAvailability:
+    """Занятость пула по данным ip-availability."""
+
+    subnet_id: str
+    name: str
+    cidr: str
+    total: int = 0
+    used: int = 0
+
+    @property
+    def free(self) -> int:
+        return max(0, self.total - self.used)
 
 
 @dataclass(slots=True)
@@ -79,6 +95,7 @@ class FloatingIpInfo:
     id: str
     ip: str | None
     description: str = ""
+    subnet_id: str = ""
     status: str = ""
     port_id: str = ""
     created_at: str = ""
@@ -128,6 +145,9 @@ class CloudBackend(abc.ABC):
 
     @abc.abstractmethod
     async def list_networks(self) -> list[NetworkInfo]: ...
+
+    @abc.abstractmethod
+    async def ip_availability(self, network: str) -> list[SubnetAvailability]: ...
 
     @abc.abstractmethod
     async def list_subnets(self, network: str) -> list[SubnetInfo]: ...

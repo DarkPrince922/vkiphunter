@@ -46,6 +46,20 @@ class ScriptedCloud(CloudBackend):
             SubnetInfo(id="s-2", name="ext-02", cidr="217.16.16.0/20"),
         ]
 
+    async def ip_availability(self, network):
+        from vkiphunter.cloud.base import SubnetAvailability
+
+        return [
+            SubnetAvailability(
+                subnet_id="s-1", name="ext-01", cidr="161.104.107.0/24",
+                total=256, used=256,
+            ),
+            SubnetAvailability(
+                subnet_id="s-2", name="ext-02", cidr="217.16.16.0/20",
+                total=4096, used=4090,
+            ),
+        ]
+
     async def list_networks(self):
         from vkiphunter.cloud.base import NetworkInfo
 

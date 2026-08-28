@@ -507,3 +507,79 @@ async def test_switching_network_clears_subnet_choice(app):
 
     assert ctx.state.settings.network == "private-net"
     assert ctx.state.settings.subnets == [], "подсети принадлежали прежней сети"
+
+
+# --- занятость пулов и скрытые подсети ----------------------------------
+
+
+@pytest.mark.asyncio
+async def test_availability_shows_free_addresses_per_pool(app):
+    dp, ctx, session, bot = app
+    await feed(dp, bot, text_update("/availability"))
+
+    text = session.last_text
+    assert "Занятость пулов" in text
+    assert "161.104.106.0/23" in text
+    assert "свободно" in text
+
+
+@pytest.mark.asyncio
+async def test_availability_reveals_subnet_hidden_from_list(app):
+    dp, ctx, session, bot = app
+    await feed(dp, bot, text_update("/availability"))
+    assert "скрыта из списка" in session.last_text
+
+
+@pytest.mark.asyncio
+async def test_hidden_subnet_can_be_selected(app):
+    """Подсеть, которой нет в subnet list, всё равно доступна для выбора."""
+    dp, ctx, session, bot = app
+    listed = {s.id for s in await ctx.cloud.list_subnets("internet")}
+    assert "subnet-hidden" not in listed
+
+    await feed(dp, bot, text_update("/subnets"))
+    assert "161.104.106.0/23" in session.last_text
+
+    await feed(dp, bot, callback_update("sub:tog:subnet-hidden"))
+    assert ctx.state.settings.subnet_ids == ["subnet-hidden"]
+
+
+@pytest.mark.asyncio
+async def test_availability_explains_409_when_targets_are_full(app):
+    dp, ctx, session, bot = app
+    await feed(dp, bot, text_update("/availability"))
+    # в симуляторе целевые пулы заняты полностью
+    assert "нет свободных адресов" in session.last_text
+
+
+@pytest.mark.asyncio
+async def test_stats_are_counted_per_run(app):
+    dp, ctx, session, bot = app
+    ctx.state.settings.max_attempts = 3
+
+    await feed(dp, bot, text_update("/hunt"))
+    await asyncio.wait_for(ctx.hunter._task, timeout=10)
+    first_total = ctx.state.stats.attempts
+
+    await feed(dp, bot, text_update("/hunt"))
+    await asyncio.wait_for(ctx.hunter._task, timeout=10)
+    await feed(dp, bot, text_update("/status"))
+
+    assert ctx.state.stats.attempts == first_total * 2
+    assert "За запуск: <b>3</b>" in session.last_text
+    assert "Всего за всё время" in session.last_text
+
+
+@pytest.mark.asyncio
+async def test_stats_reset(app):
+    dp, ctx, session, bot = app
+    ctx.state.settings.max_attempts = 2
+    await feed(dp, bot, text_update("/hunt"))
+    await asyncio.wait_for(ctx.hunter._task, timeout=10)
+    assert ctx.state.stats.attempts
+
+    await feed(dp, bot, callback_update("ui:reset_stats"))
+
+    assert ctx.state.stats.attempts == 0
+    assert ctx.state.stats.seen_ips == {}
+    assert ctx.state.attempts == []

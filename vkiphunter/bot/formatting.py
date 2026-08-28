@@ -90,10 +90,18 @@ def status_text(state: AppState, hunter: Hunter, credentials=None) -> str:
         lines.append(f"Аккаунт: <code>{escape(hunter.account)}</code>")
     lines.append("")
 
+    run = stats.since(getattr(hunter, "run_baseline", None))
+    scope = "За запуск" if run["attempts"] != stats.attempts else "Попыток"
     lines.append(
-        f"Попыток: <b>{stats.attempts}</b> · "
-        f"мимо: {stats.rejected} · 409: {stats.pool_empty} · ошибок: {stats.errors}"
+        f"{scope}: <b>{run['attempts']}</b> · "
+        f"мимо: {run['rejected']} · 409: {run['pool_empty']} · "
+        f"ошибок: {run['errors']}"
     )
+    if run["attempts"] != stats.attempts:
+        lines.append(
+            f"<i>Всего за всё время: {stats.attempts} · мимо {stats.rejected} · "
+            f"409 {stats.pool_empty}</i>"
+        )
     if stats.quota:
         lines.append(
             f"🚧 Квота исчерпана: <b>{stats.quota}</b> раз — "
@@ -340,6 +348,7 @@ HELP = """<b>VK IP Hunter</b>
 /targets — целевые диапазоны и исключения
 /networks — какие внешние сети есть и что в них за пулы
 /subnets — из каких подсетей просить адрес
+/availability — сколько свободных адресов в каждом пуле
 /connect — подключить VK Cloud (спрошу доступы здесь же)
 /disconnect — забыть доступы к облаку
 /cloud — проверить доступ к облаку

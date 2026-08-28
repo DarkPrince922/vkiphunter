@@ -44,6 +44,7 @@ COMMANDS = [
     BotCommand(command="targets", description="Целевые диапазоны"),
     BotCommand(command="networks", description="Внешние сети и их пулы"),
     BotCommand(command="subnets", description="Выбрать подсети для охоты"),
+    BotCommand(command="availability", description="Свободные адреса по пулам"),
     BotCommand(command="connect", description="Подключить VK Cloud"),
     BotCommand(command="disconnect", description="Забыть доступы к облаку"),
     BotCommand(command="cloud", description="Проверить доступ к облаку"),

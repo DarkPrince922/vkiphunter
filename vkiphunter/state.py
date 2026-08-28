@@ -95,6 +95,26 @@ class Stats:
     last_attempt_at: float | None = None
     seen_ips: dict[str, int] = field(default_factory=dict)
 
+    COUNTERS = ("attempts", "rejected", "matches", "errors", "pool_empty", "quota")
+
+    def counters(self) -> dict[str, int]:
+        return {name: getattr(self, name) for name in self.COUNTERS}
+
+    def since(self, baseline: dict[str, int] | None) -> dict[str, int]:
+        """Насколько счётчики выросли с момента снимка."""
+        if not baseline:
+            return self.counters()
+        return {
+            name: getattr(self, name) - baseline.get(name, 0) for name in self.COUNTERS
+        }
+
+    def reset(self) -> None:
+        for name in self.COUNTERS:
+            setattr(self, name, 0)
+        self.seen_ips.clear()
+        self.started_at = None
+        self.last_attempt_at = None
+
     def register(self, attempt: Attempt) -> None:
         self.attempts += 1
         self.last_attempt_at = attempt.ts

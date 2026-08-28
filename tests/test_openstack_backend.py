@@ -98,6 +98,30 @@ class FakeNetworkProxy:
             return iter([s for s in subnets if s.network_id == network_id])
         return iter(subnets)
 
+    def get_network_ip_availability(self, network_id, fields=None):
+        return type(
+            "A",
+            (),
+            {
+                "subnet_ip_availability": [
+                    {
+                        "subnet_id": "subnet-1",
+                        "subnet_name": "ext-01",
+                        "cidr": "161.104.107.0/24",
+                        "total_ips": 253,
+                        "used_ips": 253,
+                    },
+                    {
+                        "subnet_id": "subnet-hidden",
+                        "subnet_name": "ext-hidden",
+                        "cidr": "217.16.24.0/22",
+                        "total_ips": 1021,
+                        "used_ips": 900,
+                    },
+                ]
+            },
+        )()
+
     def networks(self, **query):
         external = FakeNetwork()
         external.is_router_external = True

@@ -13,7 +13,7 @@ from ...cloud import CloudError
 from ...logs import apply_log_level, current_level, is_verbose, tail
 from .. import formatting as fmt
 from ..context import AppContext
-from ..keyboards import back_button, log_menu, main_menu
+from ..keyboards import back_button, ips_menu, log_menu, main_menu
 from ..ui import show
 
 
@@ -80,11 +80,21 @@ async def cb_history(callback: CallbackQuery, ctx: AppContext) -> None:
 
 
 async def cmd_ips(message: Message, ctx: AppContext) -> None:
-    await message.answer(fmt.top_ips_text(ctx.state), reply_markup=back_button())
+    await message.answer(fmt.top_ips_text(ctx.state), reply_markup=ips_menu())
 
 
 async def cb_ips(callback: CallbackQuery, ctx: AppContext) -> None:
-    await show(callback, fmt.top_ips_text(ctx.state), back_button())
+    await show(callback, fmt.top_ips_text(ctx.state), ips_menu())
+
+
+async def cb_reset_stats(callback: CallbackQuery, ctx: AppContext) -> None:
+    """Обнулить счётчики — удобно после смены подсетей или режима."""
+    ctx.state.stats.reset()
+    ctx.state.attempts.clear()
+    ctx.hunter.run_baseline = {}
+    await ctx.store.save()
+    await callback.answer("Статистика обнулена")
+    await show(callback, fmt.top_ips_text(ctx.state), ips_menu())
 
 
 async def cmd_cloud(message: Message, ctx: AppContext) -> None:
@@ -205,6 +215,7 @@ def build_router() -> Router:
     router.callback_query.register(cb_menu, F.data.in_({"ui:menu", "ui:status"}))
     router.callback_query.register(cb_history, F.data == "ui:history")
     router.callback_query.register(cb_ips, F.data == "ui:ips")
+    router.callback_query.register(cb_reset_stats, F.data == "ui:reset_stats")
     router.callback_query.register(cb_cloud, F.data == "ui:cloud")
     router.callback_query.register(cb_cancel, F.data == "ui:cancel")
     router.callback_query.register(cb_help, F.data == "ui:help")
