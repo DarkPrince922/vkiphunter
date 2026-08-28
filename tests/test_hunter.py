@@ -97,6 +97,35 @@ async def test_409_is_not_fatal_and_loop_continues(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_waits_through_long_pool_outage(tmp_path):
+    """409 подряд сколько угодно раз — цикл ждёт и продолжает, не сдаваясь."""
+    outage = [PoolExhausted("409 No more IP addresses available")] * 40
+    hunter, store, cloud = make_hunter(tmp_path, [*outage, "217.16.22.90"])
+
+    await hunter.start()
+    await asyncio.wait_for(hunter._task, timeout=10)
+
+    assert store.state.stats.pool_empty == 40
+    assert store.state.stats.attempts == 41
+    assert store.state.last_found().ip == "217.16.22.90"
+    # ни одного порта не удалено: при 409 порт не создаётся
+    assert cloud.deleted == []
+
+
+@pytest.mark.asyncio
+async def test_errors_do_not_stop_the_loop_either(tmp_path):
+    """Сбои API тоже только откладывают попытку, а не останавливают охоту."""
+    script = [CloudError("тайм-аут 120 с при обращении к API")] * 15
+    hunter, store, _ = make_hunter(tmp_path, [*script, "5.188.140.9"])
+
+    await hunter.start()
+    await asyncio.wait_for(hunter._task, timeout=10)
+
+    assert store.state.stats.errors == 15
+    assert store.state.last_found().ip == "5.188.140.9"
+
+
+@pytest.mark.asyncio
 async def test_api_error_is_recorded_and_retried(tmp_path):
     hunter, store, _ = make_hunter(
         tmp_path, [CloudError("тайм-аут 120 с при обращении к API"), "217.16.28.5"]
