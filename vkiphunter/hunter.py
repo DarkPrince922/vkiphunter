@@ -24,6 +24,7 @@ from typing import Any
 from .cidr import check_ip
 from .cloud import CloudBackend, CloudError, PoolExhausted
 from .state import (
+    MODE_FLOATING_IP,
     OUTCOME_ERROR,
     OUTCOME_MATCH,
     OUTCOME_POOL_EMPTY,
@@ -60,6 +61,15 @@ class HunterEvent:
 
 
 Listener = Callable[[HunterEvent], Awaitable[None]]
+
+
+@dataclass(slots=True)
+class Allocation:
+    """Выданный облаком ресурс — порт или floating IP, для цикла это одно."""
+
+    id: str
+    ip: str | None
+    label: str
 
 
 class Hunter:
@@ -188,64 +198,107 @@ class Hunter:
 
     async def _iteration(self) -> tuple[Attempt, FoundPort | None]:
         settings = self.store.state.settings
-        name = f"{settings.prefix}-{int(time.time())}"
+        label = f"{settings.prefix}-{int(time.time())}"
         now = time.time()
 
         try:
-            port = await self.cloud.create_port(
-                settings.network, name, settings.port_timeout
-            )
+            allocation = await self._allocate(settings, label)
         except PoolExhausted as exc:
             return Attempt(now, OUTCOME_POOL_EMPTY, detail=str(exc)), None
         except CloudError as exc:
-            # Порт мог всё-таки создаться до тайм-аута — подберём его по имени,
-            # иначе он останется висеть и займёт адрес.
-            port = await self._recover_port(name)
-            if port is None:
+            # Ресурс мог всё-таки создаться до тайм-аута — подберём его по
+            # метке, иначе он останется висеть и займёт адрес.
+            allocation = await self._recover(settings, label)
+            if allocation is None:
                 return Attempt(now, OUTCOME_ERROR, detail=str(exc)), None
 
-        if not port.ip:
-            await self._safe_delete(port.id, port.name, settings.prefix)
+        if not allocation.ip:
+            await self._release(settings, allocation)
             return (
-                Attempt(now, OUTCOME_ERROR, port_id=port.id, detail="порт без IP"),
+                Attempt(
+                    now, OUTCOME_ERROR, port_id=allocation.id, detail="ресурс без IP"
+                ),
                 None,
             )
 
-        decision = check_ip(port.ip, settings.targets, settings.excludes)
+        decision = check_ip(allocation.ip, settings.targets, settings.excludes)
 
         if decision.accepted:
             found = FoundPort(
-                port_id=port.id,
-                ip=port.ip,
-                name=port.name,
+                port_id=allocation.id,
+                ip=allocation.ip,
+                name=allocation.label,
                 network=settings.network,
                 matched_cidr=decision.matched_target or "",
                 found_at=now,
+                kind=settings.mode,
             )
             attempt = Attempt(
-                now, OUTCOME_MATCH, ip=port.ip, port_id=port.id, detail=decision.reason
+                now,
+                OUTCOME_MATCH,
+                ip=allocation.ip,
+                port_id=allocation.id,
+                detail=decision.reason,
             )
             return attempt, found
 
-        deleted = await self._safe_delete(port.id, port.name, settings.prefix)
-        detail = decision.reason if deleted else f"{decision.reason}; порт НЕ удалён"
-        return Attempt(now, OUTCOME_REJECT, ip=port.ip, port_id=port.id, detail=detail), None
+        released = await self._release(settings, allocation)
+        detail = decision.reason if released else f"{decision.reason}; ресурс НЕ удалён"
+        return (
+            Attempt(
+                now,
+                OUTCOME_REJECT,
+                ip=allocation.ip,
+                port_id=allocation.id,
+                detail=detail,
+            ),
+            None,
+        )
 
-    async def _recover_port(self, name: str) -> Any | None:
+    # --- работа с ресурсом в зависимости от режима ----------------------
+
+    async def _allocate(self, settings: Any, label: str) -> Allocation:
+        if settings.mode == MODE_FLOATING_IP:
+            fip = await self.cloud.create_floating_ip(
+                settings.network, label, settings.port_timeout
+            )
+            return Allocation(fip.id, fip.ip, fip.description or label)
+
+        port = await self.cloud.create_port(
+            settings.network, label, settings.port_timeout
+        )
+        return Allocation(port.id, port.ip, port.name)
+
+    async def _recover(self, settings: Any, label: str) -> Allocation | None:
         try:
-            return await self.cloud.find_port(name)
+            if settings.mode == MODE_FLOATING_IP:
+                fip = await self.cloud.find_floating_ip(label)
+                return Allocation(fip.id, fip.ip, fip.description or label) if fip else None
+            port = await self.cloud.find_port(label)
+            return Allocation(port.id, port.ip, port.name) if port else None
         except CloudError:
             return None
 
-    async def _safe_delete(self, port_id: str, name: str, prefix: str) -> bool:
-        """Удалять только собственные probe-порты — чужие трогать нельзя."""
-        if not name.startswith(prefix):
-            log.warning("отказ от удаления постороннего порта %s (%s)", port_id, name)
+    async def _release(self, settings: Any, allocation: Allocation) -> bool:
+        """Освободить неподходящий адрес.
+
+        Удаляем только своё: метка ресурса должна начинаться с нашего
+        префикса. Чужой порт или чужой floating IP не трогаем никогда.
+        """
+        if not allocation.label.startswith(settings.prefix):
+            log.warning(
+                "отказ от удаления постороннего ресурса %s (%s)",
+                allocation.id,
+                allocation.label,
+            )
             return False
         try:
-            await self.cloud.delete_port(port_id)
+            if settings.mode == MODE_FLOATING_IP:
+                await self.cloud.delete_floating_ip(allocation.id)
+            else:
+                await self.cloud.delete_port(allocation.id)
             return True
         except CloudError as exc:
-            log.warning("не удалось удалить порт %s: %s", port_id, exc)
-            self.last_error = f"порт {port_id} не удалён: {exc}"
+            log.warning("не удалось освободить %s: %s", allocation.id, exc)
+            self.last_error = f"ресурс {allocation.id} не удалён: {exc}"
             return False

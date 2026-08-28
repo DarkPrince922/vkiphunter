@@ -6,11 +6,14 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from ..cloud.base import FlavorInfo, ImageInfo
-from ..state import HuntSettings
+from ..state import MODE_FLOATING_IP, MODE_TITLES, HuntSettings
 
 
 def main_menu(
-    running: bool, has_found: bool, connected: bool = True
+    running: bool,
+    has_found: bool,
+    connected: bool = True,
+    mode: str = "port",
 ) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     if not connected:
@@ -31,7 +34,10 @@ def main_menu(
     kb.button(text="☁️ Проверка облака", callback_data="ui:cloud")
     kb.button(text="🔌 Доступы к облаку", callback_data="conn:menu")
     if has_found:
-        kb.button(text="🖥 Создать ВМ на найденном IP", callback_data="vm:start")
+        if mode == MODE_FLOATING_IP:
+            kb.button(text="🔗 Привязать найденный IP к ВМ", callback_data="fip:attach")
+        else:
+            kb.button(text="🖥 Создать ВМ на найденном IP", callback_data="vm:start")
     kb.adjust(1, 2, 2, 2, 1, 1, 1)
     return kb.as_markup()
 
@@ -44,6 +50,9 @@ def back_button(target: str = "ui:menu") -> InlineKeyboardMarkup:
 
 def settings_menu(settings: HuntSettings) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
+    kb.button(
+        text=f"🧭 Способ: {MODE_TITLES[settings.mode]}", callback_data="set:mode"
+    )
     kb.button(text=f"⏱ Интервал: {settings.interval} с", callback_data="set:interval")
     kb.button(text=f"🌐 Сеть: {settings.network}", callback_data="set:network")
     kb.button(text=f"🏷 Префикс: {settings.prefix}", callback_data="set:prefix")
@@ -85,12 +94,13 @@ def targets_menu() -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def ports_menu(own_count: int) -> InlineKeyboardMarkup:
+def ports_menu(own_count: int, mode: str = "port") -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="🔄 Обновить", callback_data="ports:list")
     if own_count:
+        what = "floating IP" if mode == MODE_FLOATING_IP else "probe-порты"
         kb.button(
-            text=f"🧹 Удалить свои probe-порты ({own_count})",
+            text=f"🧹 Освободить свои {what} ({own_count})",
             callback_data="ports:cleanup",
         )
     kb.button(text="⬅️ Меню", callback_data="ui:menu")
@@ -109,9 +119,12 @@ def confirm(action: str, cancel: str = "ui:menu") -> InlineKeyboardMarkup:
     )
 
 
-def found_actions() -> InlineKeyboardMarkup:
+def found_actions(mode: str = "port") -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="🖥 Создать ВМ на этом порту", callback_data="vm:start")
+    if mode == MODE_FLOATING_IP:
+        kb.button(text="🔗 Привязать этот IP к ВМ", callback_data="fip:attach")
+    else:
+        kb.button(text="🖥 Создать ВМ на этом порту", callback_data="vm:start")
     kb.button(text="⬅️ Меню", callback_data="ui:menu")
     kb.adjust(1)
     return kb.as_markup()
@@ -142,6 +155,18 @@ def image_list(images: list[ImageInfo], show_all: bool) -> InlineKeyboardMarkup:
         callback_data=f"vm:images:{'all' if not show_all else 'default'}",
     )
     kb.button(text="✖️ Отмена", callback_data="vm:cancel")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def server_list(servers) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for server in servers[:24]:
+        kb.button(
+            text=f"🖥 {server.name} · {server.status}",
+            callback_data=f"fip:srv:{server.id}",
+        )
+    kb.button(text="✖️ Отмена", callback_data="ui:menu")
     kb.adjust(1)
     return kb.as_markup()
 

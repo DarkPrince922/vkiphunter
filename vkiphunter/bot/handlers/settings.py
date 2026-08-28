@@ -9,6 +9,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
 from ...cidr import DEFAULT_EXCLUDES, DEFAULT_TARGETS, CidrError, parse_network
+from ...state import MODE_FLOATING_IP, MODE_PORT, MODE_TITLES
 from .. import formatting as fmt
 from ..context import AppContext
 from ..keyboards import cancel_input, settings_menu, targets_menu
@@ -71,6 +72,15 @@ async def cb_targets(callback: CallbackQuery, ctx: AppContext) -> None:
 
 
 # --- ввод значения настройки -------------------------------------------
+
+
+async def cb_toggle_mode(callback: CallbackQuery, ctx: AppContext) -> None:
+    """Переключить способ добычи адреса. Применяется со следующей попытки."""
+    settings = ctx.state.settings
+    settings.mode = MODE_FLOATING_IP if settings.mode == MODE_PORT else MODE_PORT
+    await ctx.store.save()
+    await callback.answer(f"Теперь: {MODE_TITLES[settings.mode]}")
+    await render_settings(callback, ctx)
 
 
 async def cb_edit_field(callback: CallbackQuery, ctx: AppContext, state: FSMContext) -> None:
@@ -216,6 +226,7 @@ def build_router() -> Router:
     router.message.register(cmd_targets, Command("targets"))
     router.callback_query.register(cb_settings, F.data == "ui:settings")
     router.callback_query.register(cb_targets, F.data == "ui:targets")
+    router.callback_query.register(cb_toggle_mode, F.data == "set:mode")
     router.callback_query.register(cb_edit_field, F.data.startswith("set:"))
     router.callback_query.register(cb_targets_action, F.data.startswith("tgt:"))
     router.message.register(on_value, Edit.value)

@@ -65,6 +65,8 @@ class FakeNetworkProxy:
         self.create_error = create_error
         self.deleted = []
         self.ports_list = [FakePort()]
+        self.fips = [FakeFloatingIp()]
+        self.updated = None
 
     def find_network(self, name, ignore_missing=True):
         return FakeNetwork() if name == "internet" else None
@@ -81,7 +83,41 @@ class FakeNetworkProxy:
         return FakePort(name=name)
 
     def ports(self, **query):
+        device_id = query.get("device_id")
+        if device_id:
+            return iter([FakePort(id="srv-port", name="internal", ip="10.0.0.5")])
         return iter(self.ports_list)
+
+    def create_ip(self, floating_network_id, description):
+        if self.create_error:
+            raise self.create_error
+        fip = FakeFloatingIp(description=description)
+        self.fips.append(fip)
+        return fip
+
+    def delete_ip(self, fip_id, ignore_missing=True):
+        self.deleted.append(fip_id)
+
+    def ips(self, **query):
+        description = query.get("description")
+        if description:
+            return iter([f for f in self.fips if f.description == description])
+        return iter(self.fips)
+
+    def update_ip(self, fip_id, port_id=None, fixed_ip_address=None):
+        self.updated = {"fip": fip_id, "port_id": port_id, "fixed_ip": fixed_ip_address}
+        return FakeFloatingIp(id=fip_id, port_id=port_id)
+
+
+class FakeFloatingIp:
+    def __init__(self, id="fip-1", ip="217.16.22.90", description="vk-direct-probe-1",
+                 port_id=""):
+        self.id = id
+        self.floating_ip_address = ip
+        self.description = description
+        self.status = "DOWN"
+        self.port_id = port_id
+        self.created_at = "2026-08-28T19:56:00Z"
 
 
 class FakeFlavor:
@@ -103,6 +139,9 @@ class FakeComputeProxy:
 
     def flavors(self):
         return iter([FakeFlavor()])
+
+    def servers(self):
+        return iter([FakeServer()])
 
     def keypairs(self):
         return iter([type("K", (), {"name": "vk-key"})()])
@@ -221,3 +260,49 @@ async def test_server_boots_from_volume_on_found_port():
     assert bdm["destination_type"] == "volume"
     # imageRef не передаём — иначе Nova ругается на двойной источник загрузки
     assert "imageRef" not in kwargs
+
+
+# --- floating IP --------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_floating_ip_is_created_with_our_label():
+    backend, connection = make()
+    fip = await backend.create_floating_ip("internet", "vk-direct-probe-7", 30)
+    assert fip.ip == "217.16.22.90"
+    assert fip.description == "vk-direct-probe-7"
+    assert not fip.attached
+
+
+@pytest.mark.asyncio
+async def test_floating_ip_pool_exhausted():
+    backend, _ = make(create_error=Exception("409 No more IP addresses available"))
+    with pytest.raises(PoolExhausted):
+        await backend.create_floating_ip("internet", "probe", 30)
+
+
+@pytest.mark.asyncio
+async def test_floating_ip_found_by_description():
+    backend, _ = make()
+    assert (await backend.find_floating_ip("vk-direct-probe-1")).id == "fip-1"
+    assert await backend.find_floating_ip("чужая-метка") is None
+
+
+@pytest.mark.asyncio
+async def test_attach_uses_internal_port_of_server():
+    backend, connection = make()
+    result = await backend.attach_floating_ip("fip-1", "srv-1")
+    assert result.attached
+    assert connection.network.updated == {
+        "fip": "fip-1",
+        "port_id": "srv-port",
+        "fixed_ip": "10.0.0.5",
+    }
+
+
+@pytest.mark.asyncio
+async def test_servers_are_listed_for_attach():
+    backend, _ = make()
+    servers = await backend.list_servers()
+    assert servers[0].name == "vk-direct"
+    assert servers[0].status == "ACTIVE"

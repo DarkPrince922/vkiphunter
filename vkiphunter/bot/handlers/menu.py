@@ -22,7 +22,12 @@ async def render_menu(event: Event, ctx: AppContext) -> None:
     await show(
         event,
         fmt.status_text(ctx.state, ctx.hunter, credentials),
-        main_menu(ctx.hunter.running, bool(ctx.state.found), credentials.configured),
+        main_menu(
+            ctx.hunter.running,
+            bool(ctx.state.found),
+            credentials.configured,
+            ctx.state.settings.mode,
+        ),
     )
 
 

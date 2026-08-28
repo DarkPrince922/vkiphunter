@@ -17,10 +17,12 @@ from .base import (
     CloudError,
     CloudInfo,
     FlavorInfo,
+    FloatingIpInfo,
     ImageInfo,
     NotFound,
     PoolExhausted,
     PortInfo,
+    ServerBrief,
     ServerInfo,
 )
 
@@ -92,6 +94,28 @@ class CloudProxy(CloudBackend):
     async def list_ports(self, network: str | None = None) -> list[PortInfo]:
         return await (await self._current()).list_ports(network)
 
+    async def create_floating_ip(
+        self, network: str, description: str, timeout: int
+    ) -> FloatingIpInfo:
+        return await (await self._current()).create_floating_ip(
+            network, description, timeout
+        )
+
+    async def delete_floating_ip(self, fip_id: str) -> None:
+        await (await self._current()).delete_floating_ip(fip_id)
+
+    async def find_floating_ip(self, description: str) -> FloatingIpInfo | None:
+        return await (await self._current()).find_floating_ip(description)
+
+    async def list_floating_ips(self) -> list[FloatingIpInfo]:
+        return await (await self._current()).list_floating_ips()
+
+    async def attach_floating_ip(self, fip_id: str, server_id: str) -> FloatingIpInfo:
+        return await (await self._current()).attach_floating_ip(fip_id, server_id)
+
+    async def list_servers(self) -> list[ServerBrief]:
+        return await (await self._current()).list_servers()
+
     async def list_flavors(self) -> list[FlavorInfo]:
         return await (await self._current()).list_flavors()
 
@@ -115,6 +139,7 @@ __all__ = [
     "CloudInfo",
     "CloudProxy",
     "FlavorInfo",
+    "FloatingIpInfo",
     "ImageInfo",
     "METHOD_APPCRED",
     "METHOD_PASSWORD",
@@ -123,6 +148,7 @@ __all__ = [
     "NotFound",
     "PoolExhausted",
     "PortInfo",
+    "ServerBrief",
     "ServerInfo",
     "build_backend",
 ]

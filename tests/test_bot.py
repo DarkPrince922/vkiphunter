@@ -191,7 +191,7 @@ async def test_cleanup_never_touches_foreign_or_found_ports(app):
     assert keeper.id in remaining
     assert foreign.id in remaining
     assert probe.id not in remaining
-    assert "Удалено портов: <b>1</b>" in session.last_text
+    assert "Освобождено: <b>1</b>" in session.last_text
 
 
 @pytest.mark.asyncio
@@ -205,3 +205,111 @@ async def test_status_and_history_screens(app):
     assert "Облако доступно" in session.last_text
     await feed(dp, bot, text_update("/whoami"))
     assert "7" in session.last_text
+
+
+# --- режим floating IP --------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_mode_switch_persists(app):
+    dp, ctx, session, bot = app
+    assert ctx.state.settings.mode == "port"
+
+    await feed(dp, bot, callback_update("set:mode"))
+    assert ctx.state.settings.mode == "floatingip"
+    assert "floating IP" in session.last_text
+
+    await feed(dp, bot, callback_update("set:mode"))
+    assert ctx.state.settings.mode == "port"
+
+
+@pytest.mark.asyncio
+async def test_floating_ip_cleanup_spares_foreign_and_attached(app):
+    dp, ctx, session, bot = app
+    ctx.state.settings.mode = "floatingip"
+    cloud = ctx.cloud._backend
+
+    mine = await cloud.create_floating_ip("internet", "vk-direct-probe-1", 10)
+    keeper = await cloud.create_floating_ip("internet", "vk-direct-probe-2", 10)
+    foreign = await cloud.create_floating_ip("internet", "production-fip", 10)
+    attached = await cloud.create_floating_ip("internet", "vk-direct-probe-3", 10)
+    await cloud.attach_floating_ip(attached.id, "sim-server")
+
+    ctx.state.found.append(
+        FoundPort(
+            port_id=keeper.id,
+            ip=keeper.ip or "217.16.22.90",
+            name=keeper.description,
+            network="internet",
+            matched_cidr="217.16.16.0/21",
+            kind="floatingip",
+        )
+    )
+
+    await feed(dp, bot, callback_update("ports:cleanup_yes"))
+
+    remaining = {f.id for f in await cloud.list_floating_ips()}
+    assert keeper.id in remaining, "найденный адрес удалять нельзя"
+    assert foreign.id in remaining, "чужой floating IP трогать нельзя"
+    assert attached.id in remaining, "привязанный к ВМ удалять нельзя"
+    assert mine.id not in remaining
+    assert "Освобождено: <b>1</b>" in session.last_text
+
+
+@pytest.mark.asyncio
+async def test_attach_floating_ip_to_server(app):
+    dp, ctx, session, bot = app
+    ctx.state.settings.mode = "floatingip"
+    cloud = ctx.cloud._backend
+    fip = await cloud.create_floating_ip("internet", "vk-direct-probe-1", 10)
+    ctx.state.found.append(
+        FoundPort(
+            port_id=fip.id,
+            ip="217.16.22.90",
+            name=fip.description,
+            network="internet",
+            matched_cidr="217.16.16.0/21",
+            kind="floatingip",
+        )
+    )
+
+    await feed(dp, bot, callback_update("fip:attach"))
+    assert "К какой ВМ привязать" in session.last_text
+
+    await feed(dp, bot, callback_update("fip:srv:sim-server"))
+    assert "Floating IP привязан" in session.last_text
+    assert ctx.state.last_found().server_name == "existing-vm"
+
+
+@pytest.mark.asyncio
+async def test_vm_wizard_refuses_floating_ip(app):
+    dp, ctx, session, bot = app
+    ctx.state.settings.mode = "floatingip"
+    ctx.state.found.append(
+        FoundPort(
+            port_id="fip-1",
+            ip="217.16.22.90",
+            name="vk-direct-probe-1",
+            network="internet",
+            matched_cidr="217.16.16.0/21",
+            kind="floatingip",
+        )
+    )
+    await feed(dp, bot, text_update("/vm"))
+    assert "/attach" in session.last_text
+
+
+@pytest.mark.asyncio
+async def test_attach_refuses_port_mode(app):
+    dp, ctx, session, bot = app
+    ctx.state.found.append(
+        FoundPort(
+            port_id="port-1",
+            ip="217.16.22.90",
+            name="vk-direct-probe-1",
+            network="internet",
+            matched_cidr="217.16.16.0/21",
+        )
+    )
+    await feed(dp, bot, text_update("/attach"))
+    assert "/vm" in session.last_text

@@ -5,9 +5,11 @@ from __future__ import annotations
 import time
 from html import escape
 
-from ..cloud.base import PortInfo
+from ..cloud.base import FloatingIpInfo, PortInfo
 from ..hunter import Hunter, HunterStatus
 from ..state import (
+    MODE_FLOATING_IP,
+    MODE_TITLES,
     OUTCOME_ERROR,
     OUTCOME_MATCH,
     OUTCOME_POOL_EMPTY,
@@ -112,8 +114,8 @@ def status_text(state: AppState, hunter: Hunter, credentials=None) -> str:
 
     lines.append("")
     lines.append(
-        f"<i>сеть {escape(settings.network)} · интервал {settings.interval} с · "
-        f"целей {len(settings.targets)}</i>"
+        f"<i>{MODE_TITLES[settings.mode]} · сеть {escape(settings.network)} · "
+        f"интервал {settings.interval} с · целей {len(settings.targets)}</i>"
     )
     return "\n".join(lines)
 
@@ -138,8 +140,8 @@ def found_block(found: FoundPort) -> str:
         "🎯 <b>Целевой IP найден</b>",
         f"IP: <code>{escape(found.ip)}</code>",
         f"Диапазон: <code>{escape(found.matched_cidr)}</code>",
-        f"Порт: <code>{escape(found.port_id)}</code>",
-        f"Имя порта: <code>{escape(found.name)}</code>",
+        f"{found.title_cap}: <code>{escape(found.port_id)}</code>",
+        f"Метка: <code>{escape(found.name)}</code>",
         f"Найден: {clock(found.found_at)}",
     ]
     if found.server_id:
@@ -148,7 +150,10 @@ def found_block(found: FoundPort) -> str:
             f"(<code>{escape(found.server_id)}</code>)"
         )
     else:
-        lines.append("<i>Порт сохранён. Удалять его нельзя — вместе с ним уйдёт IP.</i>")
+        lines.append(
+            f"<i>{found.title_cap} сохранён. Удалять его нельзя — "
+            "вместе с ним уйдёт IP.</i>"
+        )
     return "\n".join(lines)
 
 
@@ -181,6 +186,7 @@ def settings_text(settings: HuntSettings) -> str:
         [
             "⚙️ <b>Настройки</b>",
             "",
+            f"Способ добычи адреса: <b>{MODE_TITLES[settings.mode]}</b>",
             f"Внешняя сеть: <code>{escape(settings.network)}</code>",
             f"Префикс портов: <code>{escape(settings.prefix)}</code>",
             f"Интервал между попытками: <b>{settings.interval} с</b>",
@@ -211,6 +217,34 @@ def targets_text(settings: HuntSettings) -> str:
         "<i>Проверка идёт по математике CIDR, а не по префиксу строки. "
         "Исключения приоритетнее целей.</i>"
     )
+    return "\n".join(lines)
+
+
+def floating_ips_text(fips: list[FloatingIpInfo], prefix: str) -> str:
+    if not fips:
+        return "Floating IP в проекте не найдено."
+    own = [f for f in fips if f.description.startswith(prefix)]
+    other = [f for f in fips if not f.description.startswith(prefix)]
+
+    lines = ["🎈 <b>Floating IP проекта</b>", ""]
+    lines.append(f"<b>Свои ({len(own)})</b>")
+    if own:
+        for fip in own[:30]:
+            attached = " · привязан" if fip.attached else ""
+            lines.append(
+                f"• <code>{escape(fip.ip or '—')}</code> · "
+                f"<code>{escape(fip.id[:8])}</code>{attached}"
+            )
+    else:
+        lines.append("<i>нет</i>")
+
+    lines.append("")
+    lines.append(f"<b>Прочие ({len(other)})</b> — не трогаю")
+    for fip in other[:15]:
+        attached = " · привязан" if fip.attached else ""
+        lines.append(f"• <code>{escape(fip.ip or '—')}</code>{attached}")
+    if len(other) > 15:
+        lines.append(f"<i>…и ещё {len(other) - 15}</i>")
     return "\n".join(lines)
 
 
@@ -270,9 +304,10 @@ HELP = """<b>VK IP Hunter</b>
 /status — текущее состояние
 /history — последние попытки
 /ips — какие адреса уже выдавались
-/ports — порты внешней сети
-/cleanup — удалить свои probe-порты
+/ports — порты или floating IP проекта
+/cleanup — освободить свои пробные адреса
 /vm — создать ВМ на найденном порту
+/attach — привязать найденный floating IP к ВМ
 /settings — параметры цикла
 /targets — целевые диапазоны и исключения
 /connect — подключить VK Cloud (спрошу доступы здесь же)

@@ -18,9 +18,12 @@ from .base import (
     CloudBackend,
     CloudInfo,
     FlavorInfo,
+    FloatingIpInfo,
     ImageInfo,
+    NotFound,
     PoolExhausted,
     PortInfo,
+    ServerBrief,
     ServerInfo,
 )
 
@@ -45,6 +48,8 @@ class FakeCloud(CloudBackend):
         pool_empty_chance: float = POOL_EMPTY_CHANCE,
     ) -> None:
         self._ports: dict[str, PortInfo] = {}
+        self._fips: dict[str, FloatingIpInfo] = {}
+        self._servers: dict[str, ServerBrief] = {}
         self._latency = latency
         self._random = random.Random(seed)
         self.pool_empty_chance = pool_empty_chance
@@ -101,6 +106,54 @@ class FakeCloud(CloudBackend):
         await self._tick()
         return list(self._ports.values())
 
+    async def create_floating_ip(
+        self, network: str, description: str, timeout: int
+    ) -> FloatingIpInfo:
+        await self._tick()
+        if self._random.random() < self.pool_empty_chance:
+            raise PoolExhausted("409 No more IP addresses available")
+        fip = FloatingIpInfo(
+            id=str(uuid.uuid4()),
+            ip=self._random_ip(),
+            description=description,
+            status="DOWN",
+            created_at=time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
+        self._fips[fip.id] = fip
+        return fip
+
+    async def delete_floating_ip(self, fip_id: str) -> None:
+        await self._tick()
+        self._fips.pop(fip_id, None)
+
+    async def find_floating_ip(self, description: str) -> FloatingIpInfo | None:
+        await self._tick()
+        for fip in self._fips.values():
+            if fip.description == description or fip.id == description:
+                return fip
+        return None
+
+    async def list_floating_ips(self) -> list[FloatingIpInfo]:
+        await self._tick()
+        return list(self._fips.values())
+
+    async def attach_floating_ip(self, fip_id: str, server_id: str) -> FloatingIpInfo:
+        await self._tick()
+        fip = self._fips.get(fip_id)
+        if fip is None:
+            raise NotFound(f"floating IP {fip_id} не найден")
+        fip.port_id = f"port-of-{server_id}"
+        fip.status = "ACTIVE"
+        return fip
+
+    async def list_servers(self) -> list[ServerBrief]:
+        await self._tick()
+        if not self._servers:
+            self._servers["sim-server"] = ServerBrief(
+                id="sim-server", name="existing-vm", status="ACTIVE"
+            )
+        return list(self._servers.values())
+
     async def list_flavors(self) -> list[FlavorInfo]:
         await self._tick()
         return [
@@ -135,8 +188,10 @@ class FakeCloud(CloudBackend):
         port = self._ports.get(port_id)
         if port:
             port.device_id = "sim-server"
+        server_id = str(uuid.uuid4())
+        self._servers[server_id] = ServerBrief(id=server_id, name=name, status="ACTIVE")
         return ServerInfo(
-            id=str(uuid.uuid4()),
+            id=server_id,
             name=name,
             status="ACTIVE",
             addresses={"internet": [{"addr": port.ip if port else "0.0.0.0"}]},

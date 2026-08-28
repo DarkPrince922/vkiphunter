@@ -14,6 +14,15 @@ from .cidr import DEFAULT_EXCLUDES, DEFAULT_TARGETS
 
 ATTEMPT_HISTORY_LIMIT = 100
 
+#: Как добывается публичный адрес.
+MODE_PORT = "port"            # порт прямо во внешней сети (исторический способ)
+MODE_FLOATING_IP = "floatingip"  # обычный floating IP
+
+MODE_TITLES = {
+    MODE_PORT: "порт во внешней сети",
+    MODE_FLOATING_IP: "floating IP",
+}
+
 OUTCOME_MATCH = "match"
 OUTCOME_REJECT = "reject"
 OUTCOME_POOL_EMPTY = "pool_empty"
@@ -24,6 +33,7 @@ OUTCOME_ERROR = "error"
 class HuntSettings:
     """Параметры цикла охоты. Все правятся через бота."""
 
+    mode: str = MODE_PORT
     network: str = "internet"
     prefix: str = "vk-direct-probe"
     interval: int = 90
@@ -76,7 +86,11 @@ class Stats:
 
 @dataclass
 class FoundPort:
-    """Порт с подходящим адресом. Удалять его нельзя — уйдёт и IP."""
+    """Ресурс с подходящим адресом. Удалять его нельзя — уйдёт и IP.
+
+    ``port_id`` хранит id ресурса: порта в режиме порта и floating IP
+    в режиме floating IP. ``kind`` говорит, что именно это.
+    """
 
     port_id: str
     ip: str
@@ -84,8 +98,17 @@ class FoundPort:
     network: str
     matched_cidr: str
     found_at: float = field(default_factory=time.time)
+    kind: str = MODE_PORT
     server_id: str | None = None
     server_name: str | None = None
+
+    @property
+    def title(self) -> str:
+        return "floating IP" if self.kind == MODE_FLOATING_IP else "порт"
+
+    @property
+    def title_cap(self) -> str:
+        return "Floating IP" if self.kind == MODE_FLOATING_IP else "Порт"
 
 
 @dataclass

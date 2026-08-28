@@ -45,6 +45,29 @@ class PortInfo:
 
 
 @dataclass(slots=True)
+class FloatingIpInfo:
+    """Floating IP. ``port_id`` непустой — адрес уже к чему-то привязан."""
+
+    id: str
+    ip: str | None
+    description: str = ""
+    status: str = ""
+    port_id: str = ""
+    created_at: str = ""
+
+    @property
+    def attached(self) -> bool:
+        return bool(self.port_id)
+
+
+@dataclass(slots=True)
+class ServerBrief:
+    id: str
+    name: str
+    status: str
+
+
+@dataclass(slots=True)
 class FlavorInfo:
     id: str
     name: str
@@ -86,6 +109,30 @@ class CloudBackend(abc.ABC):
 
     @abc.abstractmethod
     async def list_ports(self, network: str | None = None) -> list[PortInfo]: ...
+
+    # --- floating IP ----------------------------------------------------
+
+    @abc.abstractmethod
+    async def create_floating_ip(
+        self, network: str, description: str, timeout: int
+    ) -> FloatingIpInfo: ...
+
+    @abc.abstractmethod
+    async def delete_floating_ip(self, fip_id: str) -> None: ...
+
+    @abc.abstractmethod
+    async def find_floating_ip(self, description: str) -> FloatingIpInfo | None: ...
+
+    @abc.abstractmethod
+    async def list_floating_ips(self) -> list[FloatingIpInfo]: ...
+
+    @abc.abstractmethod
+    async def attach_floating_ip(self, fip_id: str, server_id: str) -> FloatingIpInfo: ...
+
+    @abc.abstractmethod
+    async def list_servers(self) -> list[ServerBrief]: ...
+
+    # --- ресурсы для ВМ -------------------------------------------------
 
     @abc.abstractmethod
     async def list_flavors(self) -> list[FlavorInfo]: ...

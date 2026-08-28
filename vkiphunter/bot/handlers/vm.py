@@ -16,6 +16,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
 from ...cloud import CloudError, FlavorInfo, ImageInfo
+from ...state import MODE_FLOATING_IP
 from ..context import AppContext
 from ..keyboards import back_button, confirm, flavor_list, image_list, keypair_list
 from ..ui import show
@@ -58,6 +59,14 @@ async def _start(event: Event, ctx: AppContext, state: FSMContext) -> None:
         await show(
             event,
             "Пока нет найденного порта — сначала дождитесь целевого IP.",
+            back_button(),
+        )
+        return
+    if found.kind == MODE_FLOATING_IP:
+        await show(
+            event,
+            "Найденный адрес — floating IP: его привязывают к существующей "
+            "машине, а не делают интерфейсом новой. Это /attach.",
             back_button(),
         )
         return

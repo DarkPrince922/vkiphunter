@@ -3,9 +3,21 @@ from pathlib import Path
 
 import pytest
 
-from vkiphunter.cloud.base import CloudBackend, CloudError, CloudInfo, PoolExhausted, PortInfo
+from vkiphunter.cloud.base import (
+    CloudBackend,
+    CloudError,
+    CloudInfo,
+    FloatingIpInfo,
+    PoolExhausted,
+    PortInfo,
+)
 from vkiphunter.hunter import EventKind, Hunter
-from vkiphunter.state import OUTCOME_POOL_EMPTY, OUTCOME_REJECT, Store
+from vkiphunter.state import (
+    MODE_FLOATING_IP,
+    OUTCOME_POOL_EMPTY,
+    OUTCOME_REJECT,
+    Store,
+)
 
 
 class ScriptedCloud(CloudBackend):
@@ -17,12 +29,15 @@ class ScriptedCloud(CloudBackend):
         self.deleted: list[str] = []
         self.calls = 0
 
-    async def create_port(self, network, name, timeout):
+    def _next(self):
         self.calls += 1
         item = self.script.pop(0) if self.script else "83.0.0.1"
         if isinstance(item, Exception):
             raise item
-        port = PortInfo(id=f"port-{self.calls}", name=name, ip=item)
+        return item
+
+    async def create_port(self, network, name, timeout):
+        port = PortInfo(id=f"port-{self.calls + 1}", name=name, ip=self._next())
         self.created.append(port)
         return port
 
@@ -31,6 +46,28 @@ class ScriptedCloud(CloudBackend):
 
     async def find_port(self, name):
         return None
+
+    async def create_floating_ip(self, network, description, timeout):
+        fip = FloatingIpInfo(
+            id=f"fip-{self.calls + 1}", ip=self._next(), description=description
+        )
+        self.created.append(fip)
+        return fip
+
+    async def delete_floating_ip(self, fip_id):
+        self.deleted.append(fip_id)
+
+    async def find_floating_ip(self, description):
+        return None
+
+    async def list_floating_ips(self):
+        return [c for c in self.created if isinstance(c, FloatingIpInfo)]
+
+    async def attach_floating_ip(self, fip_id, server_id):
+        raise NotImplementedError
+
+    async def list_servers(self):
+        return []
 
     async def check(self, network):
         return CloudInfo()
@@ -51,10 +88,12 @@ class ScriptedCloud(CloudBackend):
         raise NotImplementedError
 
 
-def make_hunter(tmp_path: Path, script, interval=0):
+def make_hunter(tmp_path: Path, script, interval=0, mode=None):
     store = Store(tmp_path / "state.json")
     store.load()
     store.state.settings.interval = interval
+    if mode:
+        store.state.settings.mode = mode
     cloud = ScriptedCloud(script)
     return Hunter(cloud, store), store, cloud
 
@@ -179,3 +218,56 @@ async def test_max_attempts_limit(tmp_path):
     await hunter.start()
     await asyncio.wait_for(hunter._task, timeout=5)
     assert store.state.stats.attempts == 3
+
+
+# --- режим floating IP --------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_floating_ip_mode_keeps_matching_address(tmp_path):
+    hunter, store, cloud = make_hunter(
+        tmp_path,
+        ["83.166.255.3", "217.16.22.90"],
+        mode=MODE_FLOATING_IP,
+    )
+    await hunter.start()
+    await asyncio.wait_for(hunter._task, timeout=5)
+
+    found = store.state.last_found()
+    assert found.ip == "217.16.22.90"
+    assert found.kind == MODE_FLOATING_IP
+    assert found.title == "floating IP"
+    # освобождён только неподходящий адрес, найденный сохранён
+    assert cloud.deleted == ["fip-1"]
+
+
+@pytest.mark.asyncio
+async def test_floating_ip_mode_waits_out_409(tmp_path):
+    outage = [PoolExhausted("409 No more IP addresses available")] * 12
+    hunter, store, cloud = make_hunter(
+        tmp_path, [*outage, "5.188.140.4"], mode=MODE_FLOATING_IP
+    )
+    await hunter.start()
+    await asyncio.wait_for(hunter._task, timeout=5)
+
+    assert store.state.stats.pool_empty == 12
+    assert store.state.last_found().ip == "5.188.140.4"
+    assert cloud.deleted == []
+
+
+@pytest.mark.asyncio
+async def test_foreign_floating_ip_is_never_deleted(tmp_path):
+    hunter, store, cloud = make_hunter(tmp_path, ["83.1.1.1"], mode=MODE_FLOATING_IP)
+    store.state.settings.max_attempts = 1
+
+    async def foreign(*args, **kwargs):
+        fip = FloatingIpInfo(id="fip-x", ip="83.1.1.1", description="production-fip")
+        cloud.created.append(fip)
+        return fip
+
+    cloud.create_floating_ip = foreign  # type: ignore[method-assign]
+    await hunter.start()
+    await asyncio.wait_for(hunter._task, timeout=5)
+
+    assert cloud.deleted == []
+    assert "НЕ удалён" in store.state.attempts[-1].detail

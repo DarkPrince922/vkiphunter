@@ -17,10 +17,12 @@ from .base import (
     CloudError,
     CloudInfo,
     FlavorInfo,
+    FloatingIpInfo,
     ImageInfo,
     NotFound,
     PoolExhausted,
     PortInfo,
+    ServerBrief,
     ServerInfo,
 )
 
@@ -163,6 +165,72 @@ class OpenStackBackend(CloudBackend):
 
         return await self._call(_list, timeout=120)
 
+    # --- floating IP ----------------------------------------------------
+
+    async def create_floating_ip(
+        self, network: str, description: str, timeout: int
+    ) -> FloatingIpInfo:
+        def _create(conn: Any) -> FloatingIpInfo:
+            net = conn.network.find_network(network, ignore_missing=True)
+            if net is None:
+                raise NotFound(f"внешняя сеть {network!r} не найдена")
+            fip = conn.network.create_ip(
+                floating_network_id=net.id, description=description
+            )
+            return _fip_info(fip)
+
+        return await self._call(_create, timeout=timeout)
+
+    async def delete_floating_ip(self, fip_id: str) -> None:
+        def _delete(conn: Any) -> None:
+            conn.network.delete_ip(fip_id, ignore_missing=True)
+
+        await self._call(_delete, timeout=120)
+
+    async def find_floating_ip(self, description: str) -> FloatingIpInfo | None:
+        def _find(conn: Any) -> FloatingIpInfo | None:
+            for fip in conn.network.ips(description=description):
+                return _fip_info(fip)
+            return None
+
+        return await self._call(_find, timeout=60)
+
+    async def list_floating_ips(self) -> list[FloatingIpInfo]:
+        def _list(conn: Any) -> list[FloatingIpInfo]:
+            return [_fip_info(fip) for fip in conn.network.ips()]
+
+        return await self._call(_list, timeout=120)
+
+    async def attach_floating_ip(self, fip_id: str, server_id: str) -> FloatingIpInfo:
+        def _attach(conn: Any) -> FloatingIpInfo:
+            target = None
+            for port in conn.network.ports(device_id=server_id):
+                if port.fixed_ips:
+                    target = port
+                    break
+            if target is None:
+                raise NotFound(
+                    "у выбранной ВМ нет внутреннего порта с адресом — "
+                    "привязать floating IP не к чему"
+                )
+            fip = conn.network.update_ip(
+                fip_id,
+                port_id=target.id,
+                fixed_ip_address=target.fixed_ips[0].get("ip_address"),
+            )
+            return _fip_info(fip)
+
+        return await self._call(_attach, timeout=180)
+
+    async def list_servers(self) -> list[ServerBrief]:
+        def _list(conn: Any) -> list[ServerBrief]:
+            return [
+                ServerBrief(id=s.id, name=s.name or "", status=s.status or "")
+                for s in conn.compute.servers()
+            ]
+
+        return await self._call(_list, timeout=120)
+
     # --- ресурсы для ВМ -------------------------------------------------
 
     async def list_flavors(self) -> list[FlavorInfo]:
@@ -244,6 +312,17 @@ class OpenStackBackend(CloudBackend):
         if self._conn is not None:
             conn, self._conn = self._conn, None
             await asyncio.to_thread(conn.close)
+
+
+def _fip_info(fip: Any) -> FloatingIpInfo:
+    return FloatingIpInfo(
+        id=fip.id,
+        ip=fip.floating_ip_address,
+        description=fip.description or "",
+        status=fip.status or "",
+        port_id=fip.port_id or "",
+        created_at=str(fip.created_at or ""),
+    )
 
 
 def _port_info(port: Any) -> PortInfo:

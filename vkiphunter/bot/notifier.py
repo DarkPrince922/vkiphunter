@@ -54,6 +54,7 @@ class Notifier:
             self.hunter.running,
             bool(self.store.state.found),
             self.credentials().configured,
+            self.store.state.settings.mode,
         )
         for chat_id in self.chats:
             message_id = self._live.get(chat_id)
@@ -116,7 +117,7 @@ class Notifier:
                 fmt.found_block(event.found)
                 + "\n\n<i>Проверьте адрес реальным запросом через целевую SIM/APN "
                 "с выключенным Wi-Fi — совпадение CIDR это ещё не пропуск.</i>",
-                markup=found_actions(),
+                markup=found_actions(self.store.state.settings.mode),
             )
             return
 
