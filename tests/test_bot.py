@@ -451,3 +451,23 @@ async def test_chosen_subnet_reaches_the_cloud_from_the_bot(app):
     found = ctx.state.last_found()
     assert found is not None
     assert found.ip.startswith("217.16.")
+
+
+@pytest.mark.asyncio
+async def test_debug_toggles_api_logging(app):
+    import logging
+
+    from vkiphunter.logs import apply_log_level
+
+    dp, ctx, session, bot = app
+    apply_log_level("INFO")
+    try:
+        await feed(dp, bot, text_update("/debug"))
+        assert "Подробный лог включён" in session.last_text
+        assert logging.getLogger("keystoneauth").level == logging.DEBUG
+
+        await feed(dp, bot, text_update("/debug"))
+        assert "Обычный лог" in session.last_text
+        assert logging.getLogger("keystoneauth").level == logging.WARNING
+    finally:
+        apply_log_level("INFO")

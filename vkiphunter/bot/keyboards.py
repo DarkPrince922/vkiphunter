@@ -47,10 +47,12 @@ def main_menu(
     return kb.as_markup()
 
 
-def log_menu() -> InlineKeyboardMarkup:
+def log_menu(verbose: bool = False) -> InlineKeyboardMarkup:
+    toggle = "📋 Обычный лог" if verbose else "🔬 Подробный лог API"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🔄 Обновить", callback_data="ui:log")],
+            [InlineKeyboardButton(text=toggle, callback_data="ui:debug")],
             [InlineKeyboardButton(text="⬅️ Меню", callback_data="ui:menu")],
         ]
     )

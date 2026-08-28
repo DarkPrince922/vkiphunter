@@ -99,7 +99,6 @@ class OpenStackBackend(CloudBackend):
     def _connect_sync(self) -> Any:
         import openstack
 
-        openstack.enable_logging(debug=False)
         return openstack.connection.Connection(**self._auth)
 
     async def _connection(self) -> Any:

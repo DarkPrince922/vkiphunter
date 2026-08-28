@@ -10,6 +10,7 @@ from aiogram.types import CallbackQuery, Message
 from html import escape
 
 from ...cloud import CloudError
+from ...logs import apply_log_level, current_level, is_verbose, tail
 from .. import formatting as fmt
 from ..context import AppContext
 from ..keyboards import back_button, log_menu, main_menu
@@ -114,26 +115,10 @@ async def _cloud_check(event: Event, ctx: AppContext) -> None:
 LOG_LINES = 25
 
 
-def _tail(path, lines: int) -> str:
-    """Последние строки лога. Файл читаем с конца, чтобы не тянуть мегабайты."""
-    try:
-        with open(path, "rb") as handle:
-            handle.seek(0, 2)
-            size = handle.tell()
-            chunk = min(size, 64 * 1024)
-            handle.seek(size - chunk)
-            text = handle.read().decode("utf-8", errors="replace")
-    except FileNotFoundError:
-        return ""
-    except OSError as exc:
-        return f"не прочитать лог: {exc}"
-    return "\n".join(text.splitlines()[-lines:])
-
-
 async def _show_log(event: Event, ctx: AppContext) -> None:
     path = ctx.settings.log_file
-    tail = _tail(path, LOG_LINES)
-    if not tail:
+    text = tail(path, LOG_LINES)
+    if not text:
         await show(
             event,
             f"Лог пуст или не найден: <code>{escape(str(path))}</code>",
@@ -141,14 +126,34 @@ async def _show_log(event: Event, ctx: AppContext) -> None:
         )
         return
 
+    mode = "подробный" if is_verbose() else "обычный"
     # 4096 — предел сообщения Telegram, оставляем запас на разметку.
-    body = escape(tail)[-3500:]
+    body = escape(text)[-3400:]
     await show(
         event,
-        f"📄 <b>Последние строки лога</b>\n<code>{escape(str(path))}</code>\n\n"
-        f"<pre>{body}</pre>",
-        log_menu(),
+        f"📄 <b>Лог</b> · режим: <b>{mode}</b>\n"
+        f"<code>{escape(str(path))}</code>\n\n<pre>{body}</pre>",
+        log_menu(is_verbose()),
     )
+
+
+async def _toggle_debug(event: Event, ctx: AppContext) -> None:
+    level = "INFO" if is_verbose() else "DEBUG"
+    applied = apply_log_level(level)
+
+    if applied == "DEBUG":
+        text = (
+            "🔬 <b>Подробный лог включён</b>\n\n"
+            "Теперь в лог пишутся все запросы к VK Cloud и ответы API "
+            "целиком — заголовки, коды, тела. Это то, что нужно для разбора "
+            "непонятных ошибок.\n\n"
+            "Пишется много: не оставляйте надолго, верните обычный режим "
+            "той же командой."
+        )
+    else:
+        text = "📋 <b>Обычный лог</b> — только события охоты."
+
+    await show(event, text, log_menu(is_verbose()))
 
 
 async def cmd_log(message: Message, ctx: AppContext) -> None:
@@ -158,6 +163,15 @@ async def cmd_log(message: Message, ctx: AppContext) -> None:
 async def cb_log(callback: CallbackQuery, ctx: AppContext) -> None:
     await callback.answer("Читаю лог…")
     await _show_log(callback, ctx)
+
+
+async def cmd_debug(message: Message, ctx: AppContext) -> None:
+    await _toggle_debug(message, ctx)
+
+
+async def cb_debug(callback: CallbackQuery, ctx: AppContext) -> None:
+    await callback.answer("Переключаю…")
+    await _toggle_debug(callback, ctx)
 
 
 async def cmd_whoami(message: Message) -> None:
@@ -187,6 +201,7 @@ def build_router() -> Router:
     router.message.register(cmd_cloud, Command("cloud"))
     router.message.register(cmd_whoami, Command("whoami"))
     router.message.register(cmd_log, Command("log", "logs"))
+    router.message.register(cmd_debug, Command("debug", "verbose"))
     router.callback_query.register(cb_menu, F.data.in_({"ui:menu", "ui:status"}))
     router.callback_query.register(cb_history, F.data == "ui:history")
     router.callback_query.register(cb_ips, F.data == "ui:ips")
@@ -194,4 +209,5 @@ def build_router() -> Router:
     router.callback_query.register(cb_cancel, F.data == "ui:cancel")
     router.callback_query.register(cb_help, F.data == "ui:help")
     router.callback_query.register(cb_log, F.data == "ui:log")
+    router.callback_query.register(cb_debug, F.data == "ui:debug")
     return router
