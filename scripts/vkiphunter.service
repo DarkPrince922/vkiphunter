@@ -11,6 +11,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+# Раскомментируйте, если бот установлен под отдельным пользователем
+# (см. INSTALL.md) — каталог /opt/vkiphunter должен принадлежать ему.
+#User=vkiphunter
+#Group=vkiphunter
 WorkingDirectory=/opt/vkiphunter
 EnvironmentFile=-/opt/vkiphunter/.env
 ExecStart=/opt/vkiphunter/.venv/bin/python -m vkiphunter

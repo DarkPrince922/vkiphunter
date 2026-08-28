@@ -40,6 +40,7 @@ COMMANDS = [
     BotCommand(command="ports", description="Порты внешней сети"),
     BotCommand(command="cleanup", description="Удалить свои probe-порты"),
     BotCommand(command="vm", description="Создать ВМ на найденном порту"),
+    BotCommand(command="attach", description="Привязать floating IP к ВМ"),
     BotCommand(command="settings", description="Настройки цикла"),
     BotCommand(command="targets", description="Целевые диапазоны"),
     BotCommand(command="networks", description="Внешние сети и их пулы"),
