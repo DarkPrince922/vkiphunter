@@ -19,6 +19,7 @@ from .base import (
     FlavorInfo,
     FloatingIpInfo,
     ImageInfo,
+    NetworkInfo,
     NotFound,
     PoolExhausted,
     PortInfo,
@@ -83,6 +84,9 @@ class CloudProxy(CloudBackend):
 
     async def check(self, network: str) -> CloudInfo:
         return await (await self._current()).check(network)
+
+    async def list_networks(self) -> list[NetworkInfo]:
+        return await (await self._current()).list_networks()
 
     async def list_subnets(self, network: str) -> list[SubnetInfo]:
         return await (await self._current()).list_subnets(network)
@@ -150,6 +154,7 @@ __all__ = [
     "FlavorInfo",
     "FloatingIpInfo",
     "ImageInfo",
+    "NetworkInfo",
     "METHOD_APPCRED",
     "METHOD_PASSWORD",
     "METHOD_SIMULATE",

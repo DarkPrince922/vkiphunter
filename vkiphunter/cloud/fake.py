@@ -24,6 +24,7 @@ from .base import (
     PoolExhausted,
     PortInfo,
     ServerBrief,
+    NetworkInfo,
     ServerInfo,
     SubnetInfo,
 )
@@ -82,8 +83,23 @@ class FakeCloud(CloudBackend):
 
     async def list_subnets(self, network: str) -> list[SubnetInfo]:
         await self._tick()
+        return [SubnetInfo(id=i, name=name, cidr=cidr) for i, name, cidr in SUBNETS]
+
+    async def list_networks(self) -> list[NetworkInfo]:
+        await self._tick()
         return [
-            SubnetInfo(id=i, name=name, cidr=cidr) for i, name, cidr in SUBNETS
+            NetworkInfo(
+                id="sim-network",
+                name="internet",
+                external=True,
+                subnets=await self.list_subnets("internet"),
+            ),
+            NetworkInfo(
+                id="sim-private",
+                name="private-net",
+                external=False,
+                subnets=[SubnetInfo(id="s-priv", name="priv", cidr="10.0.0.0/24")],
+            ),
         ]
 
     async def check(self, network: str) -> CloudInfo:

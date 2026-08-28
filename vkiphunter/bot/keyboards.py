@@ -29,7 +29,7 @@ def main_menu(
     kb.button(text="📜 История", callback_data="ui:history")
     kb.button(text="📈 Адреса", callback_data="ui:ips")
     kb.button(text="🎯 Диапазоны", callback_data="ui:targets")
-    kb.button(text="🗺 Подсети", callback_data="ui:subnets")
+    kb.button(text="🗺 Сети и пулы", callback_data="ui:networks")
     kb.button(text="⚙️ Настройки", callback_data="ui:settings")
     kb.button(
         text="🎈 Floating IP" if mode == MODE_FLOATING_IP else "🔌 Порты",
@@ -71,7 +71,7 @@ def settings_menu(settings: HuntSettings) -> InlineKeyboardMarkup:
     )
     kb.button(text=f"⏱ Интервал: {settings.interval} с", callback_data="set:interval")
     kb.button(text=f"👥 Воркеров: {settings.workers}", callback_data="set:workers")
-    kb.button(text=f"🌐 Сеть: {settings.network}", callback_data="set:network")
+    kb.button(text=f"🌐 Сеть: {settings.network}", callback_data="ui:networks")
     kb.button(
         text=f"🗺 Подсети: {settings.subnet_summary()}",
         callback_data="ui:subnets",

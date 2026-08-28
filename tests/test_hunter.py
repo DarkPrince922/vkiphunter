@@ -46,6 +46,18 @@ class ScriptedCloud(CloudBackend):
             SubnetInfo(id="s-2", name="ext-02", cidr="217.16.16.0/20"),
         ]
 
+    async def list_networks(self):
+        from vkiphunter.cloud.base import NetworkInfo
+
+        return [
+            NetworkInfo(
+                id="net-1",
+                name="internet",
+                external=True,
+                subnets=await self.list_subnets("internet"),
+            )
+        ]
+
     async def create_port(self, network, name, timeout, subnet_id=""):
         self.subnets_asked.append(subnet_id)
         port = PortInfo(id=f"port-{self.calls + 1}", name=name, ip=self._next())

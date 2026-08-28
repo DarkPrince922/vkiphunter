@@ -125,6 +125,101 @@ async def _show_subnets(event: Event, ctx: AppContext) -> None:
     )
 
 
+# --- внешние сети -------------------------------------------------------
+
+
+def networks_keyboard(networks, current: str) -> InlineKeyboardMarkup:
+    rows = []
+    for network in networks[:15]:
+        tick = "✅ " if network.name == current else "▫️ "
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{tick}{network.name}",
+                    callback_data=f"net:pick:{network.id}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(text="🗺 Подсети", callback_data="ui:subnets")])
+    rows.append([InlineKeyboardButton(text="⬅️ Меню", callback_data="ui:menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _show_networks(event: Event, ctx: AppContext) -> None:
+    settings = ctx.state.settings
+    try:
+        networks = await ctx.cloud.list_networks()
+    except CloudError as exc:
+        await show(event, f"❌ Не получить сети:\n<code>{exc}</code>")
+        return
+
+    external = [n for n in networks if n.external] or networks
+    lines = ["🌐 <b>Внешние сети проекта</b>", ""]
+    hits: list[str] = []
+
+    for network in external[:15]:
+        mark = "✅" if network.name == settings.network else "▫️"
+        lines.append(f"{mark} <b>{escape(network.name)}</b>")
+        if not network.subnets:
+            lines.append("    <i>без подсетей</i>")
+        for subnet in network.subnets[:10]:
+            hit = overlapping_target(subnet.cidr, settings.targets)
+            if hit:
+                hits.append(f"{network.name} → {subnet.cidr}")
+            bullet = "🎯" if hit else "▫️"
+            lines.append(f"    {bullet} <code>{escape(subnet.cidr)}</code>")
+        lines.append("")
+
+    if hits:
+        lines.append("🎯 <b>Целевые диапазоны найдены здесь:</b>")
+        lines += [f"• {escape(h)}" for h in hits]
+        lines.append("")
+        lines.append(
+            "Выберите нужную сеть кнопкой, затем отметьте подсети в /subnets."
+        )
+    else:
+        lines.append(
+            "⚠️ <b>Ни в одной сети проекта нет целевых диапазонов.</b>\n\n"
+            "Значит, этому проекту такие адреса сейчас не выдаются вообще — "
+            "ни ожиданием, ни воркерами это не изменить. Проверьте /targets "
+            "или заведите проект в регионе, где нужный пул есть."
+        )
+
+    await show(event, "\n".join(lines), networks_keyboard(external, settings.network))
+
+
+async def cmd_networks(message: Message, ctx: AppContext) -> None:
+    await _show_networks(message, ctx)
+
+
+async def cb_networks(callback: CallbackQuery, ctx: AppContext) -> None:
+    await callback.answer("Запрашиваю сети…")
+    await _show_networks(callback, ctx)
+
+
+async def cb_pick_network(callback: CallbackQuery, ctx: AppContext) -> None:
+    network_id = (callback.data or "").split(":", 2)[2]
+    try:
+        networks = await ctx.cloud.list_networks()
+    except CloudError as exc:
+        await show(callback, f"❌ Не получить сети:\n<code>{exc}</code>")
+        return
+
+    network = next((n for n in networks if n.id == network_id), None)
+    if network is None:
+        await callback.answer("Сеть пропала из списка", show_alert=True)
+        return
+
+    settings = ctx.state.settings
+    settings.network = network.name
+    # Подсети принадлежали прежней сети — их выбор больше не действителен.
+    settings.subnets = []
+    await ctx.store.save()
+
+    await callback.answer(f"Сеть: {network.name}")
+    await _show_networks(callback, ctx)
+
+
 async def cmd_subnets(message: Message, ctx: AppContext) -> None:
     await _show_subnets(message, ctx)
 
@@ -195,6 +290,9 @@ async def cb_none(callback: CallbackQuery, ctx: AppContext) -> None:
 def build_router() -> Router:
     router = Router(name="subnets")
     router.message.register(cmd_subnets, Command("subnets", "pools"))
+    router.message.register(cmd_networks, Command("networks", "nets"))
+    router.callback_query.register(cb_networks, F.data == "ui:networks")
+    router.callback_query.register(cb_pick_network, F.data.startswith("net:pick:"))
     router.callback_query.register(cb_subnets, F.data == "ui:subnets")
     router.callback_query.register(cb_toggle, F.data.startswith("sub:tog:"))
     router.callback_query.register(cb_all, F.data == "sub:all")

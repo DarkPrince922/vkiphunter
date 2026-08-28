@@ -19,6 +19,7 @@ from .base import (
     FlavorInfo,
     FloatingIpInfo,
     ImageInfo,
+    NetworkInfo,
     NotFound,
     PoolExhausted,
     PortInfo,
@@ -147,6 +148,38 @@ class OpenStackBackend(CloudBackend):
         return await self._call(_check, timeout=60)
 
     # --- порты ----------------------------------------------------------
+
+    async def list_networks(self) -> list[NetworkInfo]:
+        """Внешние сети проекта вместе с их подсетями.
+
+        Подсети забираем одним запросом и раскладываем по сетям — так
+        дешевле, чем спрашивать их для каждой сети отдельно.
+        """
+
+        def _list(conn: Any) -> list[NetworkInfo]:
+            by_network: dict[str, list[SubnetInfo]] = {}
+            for subnet in conn.network.subnets():
+                by_network.setdefault(subnet.network_id, []).append(
+                    SubnetInfo(
+                        id=subnet.id,
+                        name=subnet.name or "",
+                        cidr=subnet.cidr or "",
+                        ip_version=subnet.ip_version or 4,
+                    )
+                )
+            networks = []
+            for net in conn.network.networks():
+                networks.append(
+                    NetworkInfo(
+                        id=net.id,
+                        name=net.name or "",
+                        external=bool(net.is_router_external),
+                        subnets=by_network.get(net.id, []),
+                    )
+                )
+            return networks
+
+        return await self._call(_list, timeout=180)
 
     async def list_subnets(self, network: str) -> list[SubnetInfo]:
         def _list(conn: Any) -> list[SubnetInfo]:

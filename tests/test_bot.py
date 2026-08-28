@@ -471,3 +471,39 @@ async def test_debug_toggles_api_logging(app):
         assert logging.getLogger("keystoneauth").level == logging.WARNING
     finally:
         apply_log_level("INFO")
+
+
+# --- внешние сети -------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_networks_screen_points_at_target_pools(app):
+    dp, ctx, session, bot = app
+    await feed(dp, bot, text_update("/networks"))
+
+    text = session.last_text
+    assert "internet" in text
+    assert "Целевые диапазоны найдены здесь" in text
+    assert "internet → 217.16.16.0/20" in text
+
+
+@pytest.mark.asyncio
+async def test_networks_screen_states_when_project_has_nothing(app):
+    dp, ctx, session, bot = app
+    ctx.state.settings.targets = ["203.0.113.0/24"]
+
+    await feed(dp, bot, text_update("/networks"))
+
+    assert "Ни в одной сети проекта нет целевых диапазонов" in session.last_text
+
+
+@pytest.mark.asyncio
+async def test_switching_network_clears_subnet_choice(app):
+    dp, ctx, session, bot = app
+    await feed(dp, bot, callback_update("sub:tog:subnet-ext-3"))
+    assert ctx.state.settings.subnet_ids
+
+    await feed(dp, bot, callback_update("net:pick:sim-private"))
+
+    assert ctx.state.settings.network == "private-net"
+    assert ctx.state.settings.subnets == [], "подсети принадлежали прежней сети"

@@ -89,13 +89,24 @@ class FakeNetworkProxy:
         return FakePort(name=attrs.get("name", ""))
 
     def subnets(self, **query):
-        assert query.get("network_id") == "net-1"
-        return iter(
-            [
-                FakeSubnet(),
-                FakeSubnet(id="subnet-2", name="ext-02", cidr="217.16.16.0/20"),
-            ]
-        )
+        subnets = [
+            FakeSubnet(),
+            FakeSubnet(id="subnet-2", name="ext-02", cidr="217.16.16.0/20"),
+        ]
+        network_id = query.get("network_id")
+        if network_id:
+            return iter([s for s in subnets if s.network_id == network_id])
+        return iter(subnets)
+
+    def networks(self, **query):
+        external = FakeNetwork()
+        external.is_router_external = True
+        private = type(
+            "P",
+            (),
+            {"id": "net-2", "name": "private", "is_router_external": False},
+        )()
+        return iter([external, private])
 
     def delete_port(self, port_id, ignore_missing=True):
         self.deleted.append(port_id)
@@ -367,3 +378,18 @@ async def test_floating_ip_without_choice_sends_no_subnet():
     backend, connection = make()
     await backend.create_floating_ip("internet", "probe", 30)
     assert "subnet_id" not in connection.network.fip_attrs
+
+
+@pytest.mark.asyncio
+async def test_networks_are_listed_with_their_subnets():
+    backend, _ = make()
+    networks = await backend.list_networks()
+
+    external = [n for n in networks if n.external]
+    assert [n.name for n in external] == ["internet"]
+    assert [s.cidr for s in external[0].subnets] == [
+        "161.104.107.0/24",
+        "217.16.16.0/20",
+    ]
+    # внутренние сети тоже видны, но помечены
+    assert [n.name for n in networks if not n.external] == ["private"]

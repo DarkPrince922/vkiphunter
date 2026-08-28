@@ -63,6 +63,16 @@ class SubnetInfo:
 
 
 @dataclass(slots=True)
+class NetworkInfo:
+    """Сеть проекта. ``external`` — из неё выдаются публичные адреса."""
+
+    id: str
+    name: str
+    external: bool = False
+    subnets: list[SubnetInfo] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class FloatingIpInfo:
     """Floating IP. ``port_id`` непустой — адрес уже к чему-то привязан."""
 
@@ -115,6 +125,9 @@ class CloudBackend(abc.ABC):
     @abc.abstractmethod
     async def check(self, network: str) -> CloudInfo:
         """Проверить авторизацию и наличие внешней сети."""
+
+    @abc.abstractmethod
+    async def list_networks(self) -> list[NetworkInfo]: ...
 
     @abc.abstractmethod
     async def list_subnets(self, network: str) -> list[SubnetInfo]: ...
