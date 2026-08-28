@@ -25,6 +25,7 @@ from .base import (
     QuotaExceeded,
     ServerBrief,
     ServerInfo,
+    SubnetInfo,
 )
 
 
@@ -83,8 +84,15 @@ class CloudProxy(CloudBackend):
     async def check(self, network: str) -> CloudInfo:
         return await (await self._current()).check(network)
 
-    async def create_port(self, network: str, name: str, timeout: int) -> PortInfo:
-        return await (await self._current()).create_port(network, name, timeout)
+    async def list_subnets(self, network: str) -> list[SubnetInfo]:
+        return await (await self._current()).list_subnets(network)
+
+    async def create_port(
+        self, network: str, name: str, timeout: int, subnet_id: str = ""
+    ) -> PortInfo:
+        return await (await self._current()).create_port(
+            network, name, timeout, subnet_id
+        )
 
     async def delete_port(self, port_id: str) -> None:
         await (await self._current()).delete_port(port_id)
@@ -96,10 +104,10 @@ class CloudProxy(CloudBackend):
         return await (await self._current()).list_ports(network)
 
     async def create_floating_ip(
-        self, network: str, description: str, timeout: int
+        self, network: str, description: str, timeout: int, subnet_id: str = ""
     ) -> FloatingIpInfo:
         return await (await self._current()).create_floating_ip(
-            network, description, timeout
+            network, description, timeout, subnet_id
         )
 
     async def delete_floating_ip(self, fip_id: str) -> None:
@@ -152,5 +160,6 @@ __all__ = [
     "QuotaExceeded",
     "ServerBrief",
     "ServerInfo",
+    "SubnetInfo",
     "build_backend",
 ]

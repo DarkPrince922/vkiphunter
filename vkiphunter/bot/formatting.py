@@ -125,9 +125,10 @@ def status_text(state: AppState, hunter: Hunter, credentials=None) -> str:
         lines.append(f"⚠️ {escape(hunter.last_error)}")
 
     lines.append("")
+    subnet = settings.subnet_label or "любая подсеть"
     lines.append(
-        f"<i>сеть {escape(settings.network)} · интервал {settings.interval} с · "
-        f"целей {len(settings.targets)}</i>"
+        f"<i>сеть {escape(settings.network)} · {escape(subnet)} · "
+        f"интервал {settings.interval} с · целей {len(settings.targets)}</i>"
     )
     return "\n".join(lines)
 
@@ -207,6 +208,7 @@ def settings_text(settings: HuntSettings) -> str:
             f"Способ добычи адреса: <b>{MODE_TITLES[settings.mode]}</b>",
             f"Воркеров: <b>{settings.workers}</b>",
             f"Внешняя сеть: <code>{escape(settings.network)}</code>",
+            f"Подсеть: <code>{escape(settings.subnet_label or 'любая')}</code>",
             f"Префикс портов: <code>{escape(settings.prefix)}</code>",
             f"Интервал между попытками: <b>{settings.interval} с</b>",
             f"Тайм-аут создания порта: <b>{settings.port_timeout} с</b>",
@@ -329,6 +331,7 @@ HELP = """<b>VK IP Hunter</b>
 /attach — привязать найденный floating IP к ВМ
 /settings — параметры цикла
 /targets — целевые диапазоны и исключения
+/subnets — из какой подсети просить адрес
 /connect — подключить VK Cloud (спрошу доступы здесь же)
 /disconnect — забыть доступы к облаку
 /cloud — проверить доступ к облаку

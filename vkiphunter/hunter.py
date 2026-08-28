@@ -158,12 +158,14 @@ class Hunter:
 
             workers = max(1, min(settings.workers, 16))
             log.info(
-                "старт охоты: %s · %s · воркеров %d · интервал %d с · сеть %s",
+                "старт охоты: %s · %s · воркеров %d · интервал %d с · сеть %s · "
+                "подсеть %s",
                 self.account or "аккаунт неизвестен",
                 MODE_TITLES.get(settings.mode, settings.mode),
                 workers,
                 settings.interval,
                 settings.network,
+                settings.subnet_label or "любая",
             )
 
             tasks = [
@@ -361,12 +363,12 @@ class Hunter:
     async def _allocate(self, settings: Any, label: str) -> Allocation:
         if settings.mode == MODE_FLOATING_IP:
             fip = await self.cloud.create_floating_ip(
-                settings.network, label, settings.port_timeout
+                settings.network, label, settings.port_timeout, settings.subnet_id
             )
             return Allocation(fip.id, fip.ip, fip.description or label)
 
         port = await self.cloud.create_port(
-            settings.network, label, settings.port_timeout
+            settings.network, label, settings.port_timeout, settings.subnet_id
         )
         return Allocation(port.id, port.ip, port.name)
 

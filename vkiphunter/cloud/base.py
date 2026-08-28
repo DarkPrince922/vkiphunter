@@ -53,6 +53,16 @@ class PortInfo:
 
 
 @dataclass(slots=True)
+class SubnetInfo:
+    """Подсеть внешней сети — отдельный пул адресов."""
+
+    id: str
+    name: str
+    cidr: str
+    ip_version: int = 4
+
+
+@dataclass(slots=True)
 class FloatingIpInfo:
     """Floating IP. ``port_id`` непустой — адрес уже к чему-то привязан."""
 
@@ -107,7 +117,12 @@ class CloudBackend(abc.ABC):
         """Проверить авторизацию и наличие внешней сети."""
 
     @abc.abstractmethod
-    async def create_port(self, network: str, name: str, timeout: int) -> PortInfo: ...
+    async def list_subnets(self, network: str) -> list[SubnetInfo]: ...
+
+    @abc.abstractmethod
+    async def create_port(
+        self, network: str, name: str, timeout: int, subnet_id: str = ""
+    ) -> PortInfo: ...
 
     @abc.abstractmethod
     async def delete_port(self, port_id: str) -> None: ...
@@ -122,7 +137,7 @@ class CloudBackend(abc.ABC):
 
     @abc.abstractmethod
     async def create_floating_ip(
-        self, network: str, description: str, timeout: int
+        self, network: str, description: str, timeout: int, subnet_id: str = ""
     ) -> FloatingIpInfo: ...
 
     @abc.abstractmethod

@@ -25,6 +25,7 @@ from .base import (
     QuotaExceeded,
     ServerBrief,
     ServerInfo,
+    SubnetInfo,
 )
 
 log = logging.getLogger(__name__)
@@ -148,12 +149,35 @@ class OpenStackBackend(CloudBackend):
 
     # --- порты ----------------------------------------------------------
 
-    async def create_port(self, network: str, name: str, timeout: int) -> PortInfo:
+    async def list_subnets(self, network: str) -> list[SubnetInfo]:
+        def _list(conn: Any) -> list[SubnetInfo]:
+            net = conn.network.find_network(network, ignore_missing=True)
+            if net is None:
+                raise NotFound(f"внешняя сеть {network!r} не найдена")
+            return [
+                SubnetInfo(
+                    id=subnet.id,
+                    name=subnet.name or "",
+                    cidr=subnet.cidr or "",
+                    ip_version=subnet.ip_version or 4,
+                )
+                for subnet in conn.network.subnets(network_id=net.id)
+            ]
+
+        return await self._call(_list, timeout=120)
+
+    async def create_port(
+        self, network: str, name: str, timeout: int, subnet_id: str = ""
+    ) -> PortInfo:
         def _create(conn: Any) -> PortInfo:
             net = conn.network.find_network(network, ignore_missing=True)
             if net is None:
                 raise NotFound(f"внешняя сеть {network!r} не найдена")
-            port = conn.network.create_port(network_id=net.id, name=name)
+            attrs: dict[str, Any] = {"network_id": net.id, "name": name}
+            if subnet_id:
+                # Просим адрес из конкретного пула, а не любой свободный.
+                attrs["fixed_ips"] = [{"subnet_id": subnet_id}]
+            port = conn.network.create_port(**attrs)
             return _port_info(port)
 
         return await self._call(_create, timeout=timeout)
@@ -186,15 +210,20 @@ class OpenStackBackend(CloudBackend):
     # --- floating IP ----------------------------------------------------
 
     async def create_floating_ip(
-        self, network: str, description: str, timeout: int
+        self, network: str, description: str, timeout: int, subnet_id: str = ""
     ) -> FloatingIpInfo:
         def _create(conn: Any) -> FloatingIpInfo:
             net = conn.network.find_network(network, ignore_missing=True)
             if net is None:
                 raise NotFound(f"внешняя сеть {network!r} не найдена")
-            fip = conn.network.create_ip(
-                floating_network_id=net.id, description=description
-            )
+            attrs: dict[str, Any] = {
+                "floating_network_id": net.id,
+                "description": description,
+            }
+            if subnet_id:
+                # Neutron умеет выделять адрес из указанной подсети пула.
+                attrs["subnet_id"] = subnet_id
+            fip = conn.network.create_ip(**attrs)
             return _fip_info(fip)
 
         return await self._call(_create, timeout=timeout)

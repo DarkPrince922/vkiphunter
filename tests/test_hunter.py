@@ -29,6 +29,7 @@ class ScriptedCloud(CloudBackend):
         self.created: list[PortInfo] = []
         self.deleted: list[str] = []
         self.calls = 0
+        self.subnets_asked: list[str] = []
 
     def _next(self):
         self.calls += 1
@@ -37,7 +38,16 @@ class ScriptedCloud(CloudBackend):
             raise item
         return item
 
-    async def create_port(self, network, name, timeout):
+    async def list_subnets(self, network):
+        from vkiphunter.cloud.base import SubnetInfo
+
+        return [
+            SubnetInfo(id="s-1", name="ext-01", cidr="161.104.107.0/24"),
+            SubnetInfo(id="s-2", name="ext-02", cidr="217.16.16.0/20"),
+        ]
+
+    async def create_port(self, network, name, timeout, subnet_id=""):
+        self.subnets_asked.append(subnet_id)
         port = PortInfo(id=f"port-{self.calls + 1}", name=name, ip=self._next())
         self.created.append(port)
         return port
@@ -48,7 +58,8 @@ class ScriptedCloud(CloudBackend):
     async def find_port(self, name):
         return None
 
-    async def create_floating_ip(self, network, description, timeout):
+    async def create_floating_ip(self, network, description, timeout, subnet_id=""):
+        self.subnets_asked.append(subnet_id)
         fip = FloatingIpInfo(
             id=f"fip-{self.calls + 1}", ip=self._next(), description=description
         )
@@ -331,3 +342,36 @@ async def test_quota_is_not_confused_with_empty_pool(tmp_path):
     assert store.state.attempts[0].outcome == OUTCOME_QUOTA
     assert store.state.stats.quota == 1
     assert store.state.stats.pool_empty == 0
+
+
+# --- выбор подсети ------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_chosen_subnet_is_passed_to_the_cloud(tmp_path):
+    hunter, store, cloud = make_hunter(tmp_path, ["217.16.22.90"])
+    store.state.settings.subnet_id = "s-2"
+
+    await hunter.start()
+    await asyncio.wait_for(hunter._task, timeout=5)
+
+    assert cloud.subnets_asked == ["s-2"]
+
+
+@pytest.mark.asyncio
+async def test_without_choice_subnet_is_not_forced(tmp_path):
+    hunter, store, cloud = make_hunter(tmp_path, ["217.16.22.90"])
+    await hunter.start()
+    await asyncio.wait_for(hunter._task, timeout=5)
+    assert cloud.subnets_asked == [""]
+
+
+@pytest.mark.asyncio
+async def test_subnet_also_applies_to_floating_ip_mode(tmp_path):
+    hunter, store, cloud = make_hunter(
+        tmp_path, ["5.188.140.5"], mode=MODE_FLOATING_IP
+    )
+    store.state.settings.subnet_id = "s-2"
+    await hunter.start()
+    await asyncio.wait_for(hunter._task, timeout=5)
+    assert cloud.subnets_asked == ["s-2"]

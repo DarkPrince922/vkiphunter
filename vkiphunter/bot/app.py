@@ -43,6 +43,7 @@ COMMANDS = [
     BotCommand(command="vm", description="Создать ВМ на найденном порту"),
     BotCommand(command="settings", description="Настройки цикла"),
     BotCommand(command="targets", description="Целевые диапазоны"),
+    BotCommand(command="subnets", description="Выбрать подсеть внешней сети"),
     BotCommand(command="connect", description="Подключить VK Cloud"),
     BotCommand(command="disconnect", description="Забыть доступы к облаку"),
     BotCommand(command="cloud", description="Проверить доступ к облаку"),

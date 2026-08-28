@@ -369,3 +369,62 @@ async def test_log_command_without_file(app):
     dp, ctx, session, bot = app
     await feed(dp, bot, text_update("/log"))
     assert "Лог пуст" in session.last_text
+
+
+# --- выбор подсети ------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_subnets_screen_marks_matching_pools(app):
+    dp, ctx, session, bot = app
+    await feed(dp, bot, text_update("/subnets"))
+
+    text = session.last_text
+    assert "161.104.107.0/24" in text
+    assert "217.16.16.0/20" in text
+    assert "пересекается с целью" in text
+    assert "Подходящих подсетей" in text
+
+
+@pytest.mark.asyncio
+async def test_picking_subnet_is_saved(app):
+    dp, ctx, session, bot = app
+    await feed(dp, bot, callback_update("sub:pick:subnet-ext-3"))
+
+    assert ctx.state.settings.subnet_id == "subnet-ext-3"
+    assert ctx.state.settings.subnet_label == "217.16.16.0/20"
+    assert "217.16.16.0/20" in session.last_text
+
+    await feed(dp, bot, callback_update("sub:pick:any"))
+    assert ctx.state.settings.subnet_id == ""
+
+
+@pytest.mark.asyncio
+async def test_warns_when_chosen_subnet_misses_targets(app):
+    dp, ctx, session, bot = app
+    await feed(dp, bot, callback_update("sub:pick:subnet-ext-1"))
+    assert "не пересекается" in session.last_text
+
+
+@pytest.mark.asyncio
+async def test_warns_when_no_subnet_can_ever_match(app):
+    dp, ctx, session, bot = app
+    ctx.state.settings.targets = ["203.0.113.0/24"]
+    await feed(dp, bot, text_update("/subnets"))
+    assert "Ни одна подсеть не пересекается" in session.last_text
+
+
+@pytest.mark.asyncio
+async def test_chosen_subnet_reaches_the_cloud_from_the_bot(app):
+    dp, ctx, session, bot = app
+    ctx.state.settings.mode = "floatingip"
+    ctx.state.settings.max_attempts = 6
+    await feed(dp, bot, callback_update("sub:pick:subnet-ext-3"))
+
+    await feed(dp, bot, text_update("/hunt"))
+    await asyncio.wait_for(ctx.hunter._task, timeout=10)
+
+    # подсеть 217.16.16.0/20 целиком внутри целей — попадание с первой попытки
+    found = ctx.state.last_found()
+    assert found is not None
+    assert found.ip.startswith("217.16.")

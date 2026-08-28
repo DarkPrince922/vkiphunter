@@ -36,6 +36,8 @@ class HuntSettings:
 
     mode: str = MODE_PORT
     network: str = "internet"
+    subnet_id: str = ""      # пусто — любая подсеть внешней сети
+    subnet_label: str = ""   # человекочитаемая подпись выбранной подсети
     prefix: str = "vk-direct-probe"
     interval: int = 90
     workers: int = 1

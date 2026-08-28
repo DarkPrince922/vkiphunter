@@ -25,6 +25,16 @@ from .base import (
     PortInfo,
     ServerBrief,
     ServerInfo,
+    SubnetInfo,
+)
+
+#: Подсети внешней сети: у настоящего проекта их тоже несколько,
+#: и без явного выбора адрес приходит из самой ёмкой.
+SUBNETS: tuple[tuple[str, str, str], ...] = (
+    ("subnet-ext-1", "ext-net-01", "161.104.107.0/24"),
+    ("subnet-ext-2", "ext-net-02", "83.166.240.0/20"),
+    ("subnet-ext-3", "ext-net-03", "217.16.16.0/20"),
+    ("subnet-ext-4", "ext-net-04", "5.188.140.0/22"),
 )
 
 #: Пулы, из которых «выдаёт» адреса симулятор: (сеть, вес).
@@ -57,12 +67,24 @@ class FakeCloud(CloudBackend):
     async def _tick(self) -> None:
         await asyncio.sleep(self._latency)
 
-    def _random_ip(self) -> str:
-        networks = [n for n, _ in POOLS]
-        weights = [w for _, w in POOLS]
+    def _random_ip(self, subnet_id: str = "") -> str:
+        if subnet_id:
+            cidr = next((c for i, _, c in SUBNETS if i == subnet_id), None)
+            if cidr is None:
+                raise NotFound(f"подсеть {subnet_id} не найдена")
+            networks, weights = [cidr], [1]
+        else:
+            networks = [n for n, _ in POOLS]
+            weights = [w for _, w in POOLS]
         network = ipaddress.ip_network(self._random.choices(networks, weights)[0])
         offset = self._random.randint(1, network.num_addresses - 2)
         return str(network.network_address + offset)
+
+    async def list_subnets(self, network: str) -> list[SubnetInfo]:
+        await self._tick()
+        return [
+            SubnetInfo(id=i, name=name, cidr=cidr) for i, name, cidr in SUBNETS
+        ]
 
     async def check(self, network: str) -> CloudInfo:
         await self._tick()
@@ -76,14 +98,16 @@ class FakeCloud(CloudBackend):
             subnets=["sim-subnet"],
         )
 
-    async def create_port(self, network: str, name: str, timeout: int) -> PortInfo:
+    async def create_port(
+        self, network: str, name: str, timeout: int, subnet_id: str = ""
+    ) -> PortInfo:
         await self._tick()
         if self._random.random() < self.pool_empty_chance:
             raise PoolExhausted("409 No more IP addresses available")
         port = PortInfo(
             id=str(uuid.uuid4()),
             name=name,
-            ip=self._random_ip(),
+            ip=self._random_ip(subnet_id),
             network_id="sim-network",
             status="DOWN",
             created_at=time.strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -107,14 +131,14 @@ class FakeCloud(CloudBackend):
         return list(self._ports.values())
 
     async def create_floating_ip(
-        self, network: str, description: str, timeout: int
+        self, network: str, description: str, timeout: int, subnet_id: str = ""
     ) -> FloatingIpInfo:
         await self._tick()
         if self._random.random() < self.pool_empty_chance:
             raise PoolExhausted("409 No more IP addresses available")
         fip = FloatingIpInfo(
             id=str(uuid.uuid4()),
-            ip=self._random_ip(),
+            ip=self._random_ip(subnet_id),
             description=description,
             status="DOWN",
             created_at=time.strftime("%Y-%m-%dT%H:%M:%SZ"),

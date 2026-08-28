@@ -96,6 +96,22 @@ def check_ip(
     return CidrDecision(str(address), False)
 
 
+def overlapping_target(cidr: str, targets: Sequence[str] = DEFAULT_TARGETS) -> str | None:
+    """Первый целевой диапазон, пересекающийся с этой сетью.
+
+    Нужно, чтобы показать, из какой подсети внешней сети вообще есть смысл
+    просить адрес: если ни одна не пересекается с целями, ждать бесполезно.
+    """
+    try:
+        network = parse_network(cidr)
+    except CidrError:
+        return None
+    for target in parse_networks(targets):
+        if network.version == target.version and network.overlaps(target):
+            return str(target)
+    return None
+
+
 def validate_networks(values: Iterable[str]) -> list[str]:
     """Нормализовать список сетей, отбросив дубликаты."""
     seen: dict[str, None] = {}

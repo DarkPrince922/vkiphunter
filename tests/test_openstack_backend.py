@@ -46,7 +46,16 @@ class FakeSession:
 class FakeNetwork:
     id = "net-1"
     name = "internet"
-    subnet_ids = ["subnet-1"]
+    subnet_ids = ["subnet-1", "subnet-2"]
+
+
+class FakeSubnet:
+    def __init__(self, id="subnet-1", name="ext-01", cidr="161.104.107.0/24"):
+        self.id = id
+        self.name = name
+        self.cidr = cidr
+        self.ip_version = 4
+        self.network_id = "net-1"
 
 
 class FakePort:
@@ -67,14 +76,26 @@ class FakeNetworkProxy:
         self.ports_list = [FakePort()]
         self.fips = [FakeFloatingIp()]
         self.updated = None
+        self.port_attrs = None
+        self.fip_attrs = None
 
     def find_network(self, name, ignore_missing=True):
         return FakeNetwork() if name == "internet" else None
 
-    def create_port(self, network_id, name):
+    def create_port(self, **attrs):
         if self.create_error:
             raise self.create_error
-        return FakePort(name=name)
+        self.port_attrs = attrs
+        return FakePort(name=attrs.get("name", ""))
+
+    def subnets(self, **query):
+        assert query.get("network_id") == "net-1"
+        return iter(
+            [
+                FakeSubnet(),
+                FakeSubnet(id="subnet-2", name="ext-02", cidr="217.16.16.0/20"),
+            ]
+        )
 
     def delete_port(self, port_id, ignore_missing=True):
         self.deleted.append(port_id)
@@ -88,10 +109,11 @@ class FakeNetworkProxy:
             return iter([FakePort(id="srv-port", name="internal", ip="10.0.0.5")])
         return iter(self.ports_list)
 
-    def create_ip(self, floating_network_id, description):
+    def create_ip(self, **attrs):
         if self.create_error:
             raise self.create_error
-        fip = FakeFloatingIp(description=description)
+        self.fip_attrs = attrs
+        fip = FakeFloatingIp(description=attrs.get("description", ""))
         self.fips.append(fip)
         return fip
 
@@ -186,7 +208,7 @@ async def test_check_reads_identity_from_session():
     assert info.username == "owner@example.com"
     assert info.region == "RegionOne"
     assert info.network_id == "net-1"
-    assert info.subnets == ["subnet-1"]
+    assert info.subnets == ["subnet-1", "subnet-2"]
 
 
 @pytest.mark.asyncio
@@ -306,3 +328,42 @@ async def test_servers_are_listed_for_attach():
     servers = await backend.list_servers()
     assert servers[0].name == "vk-direct"
     assert servers[0].status == "ACTIVE"
+
+
+# --- выбор подсети ------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_subnets_of_external_network_are_listed():
+    backend, _ = make()
+    subnets = await backend.list_subnets("internet")
+    assert [s.cidr for s in subnets] == ["161.104.107.0/24", "217.16.16.0/20"]
+    assert subnets[1].name == "ext-02"
+
+
+@pytest.mark.asyncio
+async def test_port_requests_address_from_chosen_subnet():
+    backend, connection = make()
+    await backend.create_port("internet", "probe", 30, "subnet-2")
+    assert connection.network.port_attrs["fixed_ips"] == [{"subnet_id": "subnet-2"}]
+
+
+@pytest.mark.asyncio
+async def test_port_without_choice_sends_no_fixed_ips():
+    backend, connection = make()
+    await backend.create_port("internet", "probe", 30)
+    assert "fixed_ips" not in connection.network.port_attrs
+
+
+@pytest.mark.asyncio
+async def test_floating_ip_requests_address_from_chosen_subnet():
+    backend, connection = make()
+    await backend.create_floating_ip("internet", "probe", 30, "subnet-2")
+    assert connection.network.fip_attrs["subnet_id"] == "subnet-2"
+
+
+@pytest.mark.asyncio
+async def test_floating_ip_without_choice_sends_no_subnet():
+    backend, connection = make()
+    await backend.create_floating_ip("internet", "probe", 30)
+    assert "subnet_id" not in connection.network.fip_attrs
