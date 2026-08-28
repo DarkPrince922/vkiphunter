@@ -41,10 +41,22 @@ def _is_pool_exhausted(exc: BaseException) -> bool:
 
 
 def _translate(exc: BaseException) -> CloudError:
+    import keystoneauth1.exceptions as ke
     import openstack.exceptions as oe
 
     if _is_pool_exhausted(exc):
         return PoolExhausted("409 No more IP addresses available")
+
+    # Ошибки авторизации приходят из keystoneauth, а не из openstacksdk.
+    if isinstance(exc, ke.Unauthorized):
+        return CloudAuthError("неверный логин, пароль или application credential")
+    if isinstance(exc, ke.SSLError):
+        return CloudError(f"проблема с TLS при обращении к Keystone: {exc}")
+    if isinstance(exc, (ke.ConnectFailure, ke.DiscoveryFailure)):
+        return CloudError(f"не достучаться до Keystone — проверьте OS_AUTH_URL: {exc}")
+    if isinstance(exc, ke.MissingRequiredOptions):
+        return CloudError(f"не хватает параметров подключения: {exc}")
+
     if isinstance(exc, oe.HttpException) and getattr(exc, "status_code", None) in (
         401,
         403,
@@ -93,14 +105,19 @@ class OpenStackBackend(CloudBackend):
 
     async def check(self, network: str) -> CloudInfo:
         def _check(conn: Any) -> CloudInfo:
-            auth_ref = conn.auth_ref  # бросит исключение при неверных кредах
+            # get_access выполняет саму авторизацию и бросает при неверных
+            # кредах. В openstacksdk 4.x у Connection нет auth_ref — данные
+            # о токене живут на keystoneauth-сессии.
+            session = conn.session
+            access = session.auth.get_access(session)
+
             net = conn.network.find_network(network, ignore_missing=True)
             if net is None:
                 raise NotFound(f"внешняя сеть {network!r} не найдена")
             return CloudInfo(
-                project_id=auth_ref.project_id or "",
-                project_name=getattr(auth_ref, "project_name", "") or "",
-                username=getattr(auth_ref, "username", "") or "",
+                project_id=getattr(access, "project_id", "") or "",
+                project_name=getattr(access, "project_name", "") or "",
+                username=getattr(access, "username", "") or "",
                 region=self._auth.get("region_name", ""),
                 network_id=net.id,
                 network_name=net.name,
