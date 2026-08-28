@@ -1,8 +1,10 @@
 """Конфигурация из переменных окружения / .env.
 
-Имена облачных переменных совпадают с OpenRC-файлом VK Cloud, поэтому
-достаточно выполнить ``source mcsXXXXXXXXX-openrc.sh`` перед запуском бота —
-отдельно переписывать креды в .env не нужно.
+Ничего из этого не обязательно: токен и доступы к облаку бот умеет
+спросить сам и сохранить в ``credentials.json``. Переменные нужны, только
+если удобнее задать их заранее — имена совпадают с OpenRC-файлом VK Cloud,
+поэтому ``source mcsXXXXXXXXX-openrc.sh`` перед запуском тоже сработает.
+Заданное в боте имеет приоритет над окружением.
 """
 
 from __future__ import annotations
@@ -13,6 +15,8 @@ from pathlib import Path
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from .secrets import METHOD_APPCRED, METHOD_PASSWORD, METHOD_SIMULATE, CloudCredentials
 
 
 class Settings(BaseSettings):
@@ -29,6 +33,9 @@ class Settings(BaseSettings):
 
     # --- Хранилище ------------------------------------------------------
     state_file: Path = Field(default=Path("data/state.json"), alias="STATE_FILE")
+    credentials_file: Path = Field(
+        default=Path("data/credentials.json"), alias="CREDENTIALS_FILE"
+    )
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     # --- Режим без облака (демо/отладка) --------------------------------
@@ -81,67 +88,40 @@ class Settings(BaseSettings):
 
     @property
     def cloud_configured(self) -> bool:
-        if not self.os_auth_url:
-            return False
-        if self.use_application_credential:
-            return True
-        return bool(self.os_username and self.os_password)
+        return self.env_credentials().configured
 
-    def auth_kwargs(self) -> dict[str, str]:
-        """Аргументы для ``openstack.connection.Connection``."""
-        common = {
-            "auth_url": self.os_auth_url,
-            "region_name": self.os_region_name,
-            "interface": self.os_interface,
-            "identity_api_version": self.os_identity_api_version,
-        }
-        if self.use_application_credential:
-            return {
-                **common,
-                "auth_type": "v3applicationcredential",
-                "application_credential_id": self.os_application_credential_id,
-                "application_credential_secret": self.os_application_credential_secret,
-            }
+    def env_credentials(self) -> CloudCredentials:
+        """Креды из окружения — запасной вариант, если в боте ничего не задано."""
+        if self.simulate:
+            return CloudCredentials(method=METHOD_SIMULATE)
 
-        auth: dict[str, str] = {
-            **common,
-            "auth_type": "v3password",
-            "username": self.os_username,
-            "password": self.os_password,
-        }
-        if self.os_project_id:
-            auth["project_id"] = self.os_project_id
-        if self.os_project_name:
-            auth["project_name"] = self.os_project_name
-        if self.os_user_domain_id:
-            auth["user_domain_id"] = self.os_user_domain_id
-        elif self.os_user_domain_name:
-            auth["user_domain_name"] = self.os_user_domain_name
-        if self.os_project_domain_id:
-            auth["project_domain_id"] = self.os_project_domain_id
-        elif self.os_project_domain_name:
-            auth["project_domain_name"] = self.os_project_domain_name
-        return auth
+        credentials = CloudCredentials(
+            auth_url=self.os_auth_url,
+            region=self.os_region_name,
+            interface=self.os_interface,
+            username=self.os_username,
+            password=self.os_password,
+            project_id=self.os_project_id,
+            project_name=self.os_project_name,
+            user_domain_name=self.os_user_domain_name or "users",
+            app_cred_id=self.os_application_credential_id,
+            app_cred_secret=self.os_application_credential_secret,
+        )
+        credentials.method = (
+            METHOD_APPCRED if self.use_application_credential else METHOD_PASSWORD
+        )
+        return credentials
 
-    def describe_problems(self) -> list[str]:
-        """Понятный список того, чего не хватает для запуска."""
-        problems: list[str] = []
+    def token_problem(self) -> str | None:
+        """Проверка формата токена — до создания Bot, чтобы не ловить трейсбек."""
         if not self.bot_token:
-            problems.append("BOT_TOKEN не задан")
-        elif not re.fullmatch(r"\d+:[A-Za-z0-9_-]{30,}", self.bot_token):
-            problems.append(
+            return None
+        if not re.fullmatch(r"\d+:[A-Za-z0-9_-]{30,}", self.bot_token):
+            return (
                 "BOT_TOKEN не похож на токен от @BotFather "
                 "(ожидается вид 123456789:AA...)"
             )
-        if not self.admins:
-            problems.append("ALLOWED_USER_IDS пуст — бот был бы открыт для всех")
-        if not self.simulate and not self.cloud_configured:
-            problems.append(
-                "нет доступа к OpenStack: задайте OS_AUTH_URL и "
-                "OS_USERNAME/OS_PASSWORD (или application credential), "
-                "либо включите SIMULATE=1"
-            )
-        return problems
+        return None
 
 
 @lru_cache(maxsize=1)

@@ -9,8 +9,15 @@ from ..cloud.base import FlavorInfo, ImageInfo
 from ..state import HuntSettings
 
 
-def main_menu(running: bool, has_found: bool) -> InlineKeyboardMarkup:
+def main_menu(
+    running: bool, has_found: bool, connected: bool = True
+) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
+    if not connected:
+        kb.button(text="☁️ Подключить VK Cloud", callback_data="conn:menu")
+        kb.button(text="❓ Справка", callback_data="ui:help")
+        kb.adjust(1)
+        return kb.as_markup()
     if running:
         kb.button(text="⏹ Остановить охоту", callback_data="hunt:stop")
     else:
@@ -22,9 +29,10 @@ def main_menu(running: bool, has_found: bool) -> InlineKeyboardMarkup:
     kb.button(text="⚙️ Настройки", callback_data="ui:settings")
     kb.button(text="🔌 Порты", callback_data="ports:list")
     kb.button(text="☁️ Проверка облака", callback_data="ui:cloud")
+    kb.button(text="🔌 Доступы к облаку", callback_data="conn:menu")
     if has_found:
         kb.button(text="🖥 Создать ВМ на найденном IP", callback_data="vm:start")
-    kb.adjust(1, 2, 2, 2, 1, 1)
+    kb.adjust(1, 2, 2, 2, 1, 1, 1)
     return kb.as_markup()
 
 

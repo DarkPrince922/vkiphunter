@@ -24,8 +24,8 @@ async def start_hunt(event: Event, ctx: AppContext) -> None:
         await show(
             event,
             "Охота уже идёт.\n\n"
-            + fmt.status_text(ctx.state, ctx.hunter, ctx.settings.simulate),
-            main_menu(True, bool(ctx.state.found)),
+            + fmt.status_text(ctx.state, ctx.hunter, ctx.credentials),
+            main_menu(True, bool(ctx.state.found), True),
         )
         return
 
@@ -60,8 +60,8 @@ async def stop_hunt(event: Event, ctx: AppContext) -> None:
         await show(
             event,
             "Охота и так не идёт.\n\n"
-            + fmt.status_text(ctx.state, ctx.hunter, ctx.settings.simulate),
-            main_menu(False, bool(ctx.state.found)),
+            + fmt.status_text(ctx.state, ctx.hunter, ctx.credentials),
+            main_menu(False, bool(ctx.state.found), True),
         )
         return
 

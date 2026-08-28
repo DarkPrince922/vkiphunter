@@ -43,51 +43,58 @@ git clone <repo> /opt/vkiphunter
 cd /opt/vkiphunter
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-cp .env.example .env
+.venv/bin/python -m vkiphunter
 ```
 
-В `.env` обязательны две вещи: `BOT_TOKEN` от [@BotFather](https://t.me/BotFather)
-и `ALLOWED_USER_IDS` — Telegram-ID тех, кому можно управлять ботом. Свой ID
-покажет команда `/whoami` (бот ответит им даже тому, кого не пустил).
+При первом запуске бот спросит токен от [@BotFather](https://t.me/BotFather)
+и сохранит его в `data/credentials.json` с правами 0600. Дальше всё
+настраивается в переписке:
 
-### Доступ к VK Cloud
+1. отправьте боту `/start` — первый написавший становится владельцем,
+   его ID запоминается, и больше никто управлять ботом не сможет;
+2. нажмите «Подключить VK Cloud» или отправьте `/connect`;
+3. проще всего выбрать «Вставить openrc-файл» и прислать вывод
+   `cat /root/mcs*-openrc.sh` — бот разберёт его сам и спросит только пароль.
 
-Вариант 1 — запускать с OpenRC-файлом проекта:
+Доступы проверяются живым запросом к API и сохраняются, только если
+подошли. Сообщение с паролем бот удаляет из чата сразу после прочтения.
 
-```bash
-./scripts/run.sh /root/mcs6434280924-openrc.sh
-```
+Кроме openrc есть ещё три способа: логин с паролем по шагам,
+application credential (не зависит от смены пароля аккаунта) и режим
+симуляции — потрогать бота без облачного проекта.
 
-Вариант 2 (лучше для постоянной работы) — application credential, он не
-зависит от смены пароля аккаунта:
+`.env` не нужен, но если удобнее задать что-то заранее, переменные из
+`.env.example` работают: имена совпадают с OpenRC-файлом, так что
+`source mcsXXXXXXXXX-openrc.sh` перед запуском тоже сработает. Заданное
+в боте имеет приоритет над окружением.
 
-```bash
-source /root/mcs6434280924-openrc.sh
-openstack application credential create vkiphunter
-```
+## Запуск как службы
 
-Полученные `id` и `secret` положить в `.env` как
-`OS_APPLICATION_CREDENTIAL_ID` и `OS_APPLICATION_CREDENTIAL_SECRET`.
-
-### Запуск
-
-```bash
-.venv/bin/python -m vkiphunter          # креды из .env / окружения
-./scripts/run.sh /path/to/openrc.sh     # креды из OpenRC
-```
-
-Как сервис:
+На сервере с systemd:
 
 ```bash
 cp scripts/vkiphunter.service /etc/systemd/system/
-systemctl daemon-reload && systemctl enable --now vkiphunter
+systemctl daemon-reload
+systemctl enable --now vkiphunter
+journalctl -u vkiphunter -f
 ```
 
-Проверить бота без облака:
+Где systemd нет (Termux/proot) — свой супервизор: бот переживает
+закрытие терминала, `Ctrl+C` и собственные падения, перезапускаясь
+через 5 секунд.
 
 ```bash
-SIMULATE=1 BOT_TOKEN=... ALLOWED_USER_IDS=... .venv/bin/python -m vkiphunter
+./scripts/vkiphunterctl start
+./scripts/vkiphunterctl status
+./scripts/vkiphunterctl logs
+./scripts/vkiphunterctl stop
 ```
+
+Если бот падает сразу после старта пять раз подряд, супервизор
+останавливается и пишет об этом в лог — чтобы не крутить бесконечный
+цикл на сломанной конфигурации. Пропавшая сеть падением не считается:
+бот ждёт Telegram с нарастающей паузой и поднимается сам, когда связь
+вернётся.
 
 ## Команды
 
@@ -104,6 +111,8 @@ SIMULATE=1 BOT_TOKEN=... ALLOWED_USER_IDS=... .venv/bin/python -m vkiphunter
 | `/vm` | создать ВМ на найденном порту |
 | `/settings` | интервал, сеть, префикс, тайм-ауты, лимит, диск |
 | `/targets` | целевые диапазоны и исключения |
+| `/connect` | подключить VK Cloud — бот спросит доступы в чате |
+| `/disconnect` | забыть сохранённые доступы |
 | `/cloud` | проверить авторизацию и наличие внешней сети |
 | `/whoami` | свой Telegram ID |
 
@@ -164,8 +173,9 @@ Telegram API — сеть при этом не используется.
 vkiphunter/
 ├── cidr.py          проверка адреса по CIDR
 ├── state.py         настройки, статистика, найденные порты (JSON на диске)
+├── secrets.py       токен и доступы к облаку (0600)
 ├── hunter.py        цикл охоты
 ├── config.py        переменные окружения / OpenRC
-├── cloud/           openstacksdk и симулятор
-└── bot/             aiogram: хендлеры, клавиатуры, уведомления
+├── cloud/           openstacksdk, симулятор и прокси со сменой кредов
+└── bot/             aiogram: хендлеры, мастер подключения, уведомления
 ```

@@ -8,6 +8,8 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
+from typing import Any
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
@@ -21,11 +23,13 @@ log = logging.getLogger(__name__)
 
 
 class Notifier:
-    def __init__(self, bot: Bot, store: Store, hunter: Hunter, simulate: bool) -> None:
+    def __init__(
+        self, bot: Bot, store: Store, hunter: Hunter, credentials: Callable[[], Any]
+    ) -> None:
         self.bot = bot
         self.store = store
         self.hunter = hunter
-        self.simulate = simulate
+        self.credentials = credentials
         self._live: dict[int, int] = {}
 
     # --- отправка -------------------------------------------------------
@@ -45,8 +49,12 @@ class Notifier:
 
     async def refresh_live(self) -> None:
         """Обновить живое сообщение статуса во всех чатах."""
-        text = fmt.status_text(self.store.state, self.hunter, self.simulate)
-        markup = main_menu(self.hunter.running, bool(self.store.state.found))
+        text = fmt.status_text(self.store.state, self.hunter, self.credentials())
+        markup = main_menu(
+            self.hunter.running,
+            bool(self.store.state.found),
+            self.credentials().configured,
+        )
         for chat_id in self.chats:
             message_id = self._live.get(chat_id)
             try:
@@ -99,7 +107,7 @@ class Notifier:
             elif number % report_every == 0:
                 await self.broadcast(
                     f"🔔 <b>Сводка после {number} попыток</b>\n\n"
-                    + fmt.status_text(self.store.state, self.hunter, self.simulate)
+                    + fmt.status_text(self.store.state, self.hunter, self.credentials())
                 )
             return
 

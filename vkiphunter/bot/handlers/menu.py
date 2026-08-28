@@ -18,18 +18,34 @@ Event = Message | CallbackQuery
 
 
 async def render_menu(event: Event, ctx: AppContext) -> None:
+    credentials = ctx.credentials
     await show(
         event,
-        fmt.status_text(ctx.state, ctx.hunter, ctx.settings.simulate),
-        main_menu(ctx.hunter.running, bool(ctx.state.found)),
+        fmt.status_text(ctx.state, ctx.hunter, credentials),
+        main_menu(ctx.hunter.running, bool(ctx.state.found), credentials.configured),
     )
 
 
 async def cmd_start(message: Message, ctx: AppContext, state: FSMContext) -> None:
     await state.clear()
+    user = message.from_user
+    claimed = ctx.claim_owner(user.id) if user else False
+
     ctx.state.subscribe(message.chat.id)
     await ctx.store.save()
+
+    if claimed:
+        await message.answer(
+            "👑 <b>Вы владелец этого бота.</b>\n"
+            f"Ваш ID <code>{user.id}</code> сохранён — больше никто "
+            "управлять им не сможет."
+        )
     await message.answer(fmt.HELP)
+
+    if not ctx.credentials.configured:
+        await message.answer(
+            "Осталось подключить VK Cloud — доступы я спрошу сам."
+        )
     await render_menu(message, ctx)
 
 
@@ -96,6 +112,10 @@ async def cmd_whoami(message: Message) -> None:
     )
 
 
+async def cb_help(callback: CallbackQuery) -> None:
+    await show(callback, fmt.HELP, back_button())
+
+
 async def cb_cancel(callback: CallbackQuery, ctx: AppContext, state: FSMContext) -> None:
     await state.clear()
     await render_menu(callback, ctx)
@@ -115,4 +135,5 @@ def build_router() -> Router:
     router.callback_query.register(cb_ips, F.data == "ui:ips")
     router.callback_query.register(cb_cloud, F.data == "ui:cloud")
     router.callback_query.register(cb_cancel, F.data == "ui:cancel")
+    router.callback_query.register(cb_help, F.data == "ui:help")
     return router

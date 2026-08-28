@@ -3,6 +3,7 @@ import asyncio
 import pytest
 
 from vkiphunter.bot.app import build
+from vkiphunter.cloud.fake import FakeCloud
 from vkiphunter.config import Settings
 from vkiphunter.state import FoundPort
 
@@ -11,18 +12,21 @@ from .mocked import STRANGER, callback_update, make_bot, text_update
 
 @pytest.fixture
 def app(tmp_path, monkeypatch):
+    # _env_file=None и явный SIMULATE: тесты не должны зависеть от .env
+    # и переменных окружения разработчика.
     settings = Settings(
+        _env_file=None,
+        SIMULATE="1",
         BOT_TOKEN="42:TESTTOKENTESTTOKENTESTTOKENTESTTOKEN",
         ALLOWED_USER_IDS="7",
-        SIMULATE="1",
         STATE_FILE=str(tmp_path / "state.json"),
     )
     dp, ctx, notifier = build(settings)
     bot, session = make_bot()
     ctx.bot = bot
     notifier.bot = bot
-    ctx.cloud._latency = 0  # симулятор без пауз
-    ctx.cloud.pool_empty_chance = 0  # детерминированный симулятор
+    # Симулятор без пауз и без случайных 409 — прокидываем внутрь прокси.
+    ctx.cloud._backend = FakeCloud(latency=0, seed=1, pool_empty_chance=0)
     ctx.state.settings.interval = 0
     return dp, ctx, session, bot
 
@@ -167,7 +171,7 @@ async def test_vm_without_found_port(app):
 @pytest.mark.asyncio
 async def test_cleanup_never_touches_foreign_or_found_ports(app):
     dp, ctx, session, bot = app
-    cloud = ctx.cloud
+    cloud = ctx.cloud._backend
     probe = await cloud.create_port("internet", "vk-direct-probe-1", 10)
     keeper = await cloud.create_port("internet", "vk-direct-probe-2", 10)
     foreign = await cloud.create_port("internet", "production-lb", 10)

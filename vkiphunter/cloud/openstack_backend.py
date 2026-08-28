@@ -11,7 +11,6 @@ import asyncio
 import logging
 from typing import Any
 
-from ..config import Settings
 from .base import (
     CloudAuthError,
     CloudBackend,
@@ -57,8 +56,8 @@ def _translate(exc: BaseException) -> CloudError:
 
 
 class OpenStackBackend(CloudBackend):
-    def __init__(self, settings: Settings) -> None:
-        self._settings = settings
+    def __init__(self, auth: dict[str, str]) -> None:
+        self._auth = dict(auth)
         self._conn: Any = None
         self._conn_lock = asyncio.Lock()
 
@@ -68,7 +67,7 @@ class OpenStackBackend(CloudBackend):
         import openstack
 
         openstack.enable_logging(debug=False)
-        return openstack.connection.Connection(**self._settings.auth_kwargs())
+        return openstack.connection.Connection(**self._auth)
 
     async def _connection(self) -> Any:
         if self._conn is None:
@@ -102,7 +101,7 @@ class OpenStackBackend(CloudBackend):
                 project_id=auth_ref.project_id or "",
                 project_name=getattr(auth_ref, "project_name", "") or "",
                 username=getattr(auth_ref, "username", "") or "",
-                region=self._settings.os_region_name,
+                region=self._auth.get("region_name", ""),
                 network_id=net.id,
                 network_name=net.name,
                 subnets=list(net.subnet_ids or []),

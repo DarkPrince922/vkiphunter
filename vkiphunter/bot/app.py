@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+import signal
+import sys
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -12,9 +15,10 @@ from aiogram.exceptions import TelegramNetworkError, TelegramUnauthorizedError
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand
 
-from ..cloud import build_backend
+from ..cloud import CloudProxy
 from ..config import Settings, get_settings
 from ..hunter import Hunter
+from ..secrets import SecretStore
 from ..state import Store
 from .context import AppContext
 from .handlers import build_router
@@ -22,6 +26,8 @@ from .middleware import AccessMiddleware
 from .notifier import Notifier
 
 log = logging.getLogger(__name__)
+
+TOKEN_RE = re.compile(r"\d+:[A-Za-z0-9_-]{30,}")
 
 COMMANDS = [
     BotCommand(command="menu", description="Главное меню"),
@@ -35,6 +41,8 @@ COMMANDS = [
     BotCommand(command="vm", description="Создать ВМ на найденном порту"),
     BotCommand(command="settings", description="Настройки цикла"),
     BotCommand(command="targets", description="Целевые диапазоны"),
+    BotCommand(command="connect", description="Подключить VK Cloud"),
+    BotCommand(command="disconnect", description="Забыть доступы к облаку"),
     BotCommand(command="cloud", description="Проверить доступ к облаку"),
     BotCommand(command="whoami", description="Мой Telegram ID"),
     BotCommand(command="help", description="Справка"),
@@ -51,21 +59,59 @@ def setup_logging(level: str) -> None:
     logging.getLogger("keystoneauth").setLevel(logging.WARNING)
 
 
+def resolve_token(settings: Settings, secrets: SecretStore) -> str:
+    """Токен из окружения, из файла или спрошенный в терминале один раз."""
+    if settings.bot_token:
+        return settings.bot_token
+    if secrets.secrets.bot_token:
+        return secrets.secrets.bot_token
+
+    if not sys.stdin or not sys.stdin.isatty():
+        raise SystemExit(
+            "Токен бота не задан.\n"
+            "Запустите один раз в терминале — бот спросит его и запомнит, — "
+            "либо укажите BOT_TOKEN в .env.\n"
+            "Токен выдаёт @BotFather командой /newbot."
+        )
+
+    print("Токен бота ещё не сохранён.")
+    print("Получите его у @BotFather (/newbot) и вставьте сюда.")
+    while True:
+        token = input("Токен: ").strip()
+        if TOKEN_RE.fullmatch(token):
+            break
+        print("Не похоже на токен — ожидается вид 123456789:AA…")
+
+    secrets.secrets.bot_token = token
+    secrets.save()
+    print(f"Токен сохранён в {secrets.path} (права 0600).")
+    print("Дальше всё настраивается в самом боте: отправьте ему /start.")
+    return token
+
+
 def build(settings: Settings) -> tuple[Dispatcher, AppContext, Notifier]:
     store = Store(settings.state_file)
     store.load()
 
-    cloud = build_backend(settings)
-    hunter = Hunter(cloud, store)
+    secrets = SecretStore(settings.credentials_file)
+    secrets.load()
 
-    bot = Bot(
-        token=settings.bot_token,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    token = resolve_token(settings, secrets)
+
+    bot = Bot(token=token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+
+    ctx = AppContext(
+        settings=settings,
+        store=store,
+        secrets=secrets,
+        cloud=CloudProxy(lambda: ctx.credentials),
+        hunter=None,  # type: ignore[arg-type]
+        bot=bot,
     )
-    ctx = AppContext(settings=settings, store=store, cloud=cloud, hunter=hunter, bot=bot)
+    ctx.hunter = Hunter(ctx.cloud, store)
 
-    notifier = Notifier(bot, store, hunter, settings.simulate)
-    hunter.add_listener(notifier.on_event)
+    notifier = Notifier(bot, store, ctx.hunter, lambda: ctx.credentials)
+    ctx.hunter.add_listener(notifier.on_event)
 
     dp = Dispatcher(storage=MemoryStorage())
     dp["ctx"] = ctx
@@ -73,7 +119,7 @@ def build(settings: Settings) -> tuple[Dispatcher, AppContext, Notifier]:
 
     # Inner middleware, а не outer: посторонний получает отказ только на
     # осмысленную команду, а не на каждое своё сообщение.
-    access = AccessMiddleware(settings.admins)
+    access = AccessMiddleware(lambda: ctx.admins)
     dp.message.middleware(access)
     dp.callback_query.middleware(access)
     dp.include_router(build_router())
@@ -81,45 +127,88 @@ def build(settings: Settings) -> tuple[Dispatcher, AppContext, Notifier]:
     return dp, ctx, notifier
 
 
+async def wait_for_telegram(bot: Bot, shutdown: asyncio.Event):
+    """Дождаться доступности Telegram.
+
+    Телефон может проснуться раньше сети, а мобильный интернет — пропасть
+    на часы. Падать из-за этого нельзя: сам aiogram при первом обращении
+    к API не переживает сетевую ошибку, поэтому спрашиваем его здесь, с
+    нарастающей паузой, и заодно наполняем кеш ``bot.me()``.
+    """
+    delay = 5
+    while not shutdown.is_set():
+        try:
+            return await bot.me()
+        except TelegramNetworkError as exc:
+            log.warning("Telegram недоступен (%s). Повтор через %d с.", exc, delay)
+            try:
+                await asyncio.wait_for(shutdown.wait(), timeout=delay)
+            except asyncio.TimeoutError:
+                pass
+            delay = min(delay * 2, 60)
+    return None
+
+
 async def run() -> None:
     settings = get_settings()
     setup_logging(settings.log_level)
 
-    problems = settings.describe_problems()
-    if problems:
-        for problem in problems:
-            log.error("конфигурация: %s", problem)
-        raise SystemExit(
-            "Не хватает конфигурации:\n  - " + "\n  - ".join(problems)
-        )
+    problem = settings.token_problem()
+    if problem:
+        raise SystemExit(problem)
 
     dp, ctx, notifier = build(settings)
 
     async def on_startup() -> None:
-        me = await ctx.bot.get_me()
         try:
             await ctx.bot.set_my_commands(COMMANDS)
-            await notifier.broadcast(
-                "♻️ <b>Бот перезапущен.</b> Охота не возобновляется автоматически — "
-                "нажмите «Запустить охоту», если нужно продолжить."
-            )
+            if ctx.admins:
+                await notifier.broadcast(
+                    "♻️ <b>Бот перезапущен.</b> Охота не возобновляется "
+                    "автоматически — нажмите «Запустить охоту», если нужно."
+                )
         except TelegramNetworkError as exc:
-            # Сеть может подняться позже — polling переподключится сам.
-            log.warning("Telegram недоступен при старте: %s", exc)
+            log.warning("не удалось объявить команды: %s", exc)
+
         log.info(
-            "бот @%s запущен; админов: %d; симуляция: %s",
+            "бот @%s запущен; владельцев: %d; облако: %s",
             me.username,
-            len(settings.admins),
-            settings.simulate,
+            len(ctx.admins),
+            ctx.credentials.describe(),
         )
+        if not ctx.admins:
+            log.info("владельца ещё нет — первый, кто отправит /start, займёт место")
 
     dp.startup.register(on_startup)
+
+    shutdown = asyncio.Event()
+
+    def request_shutdown() -> None:
+        shutdown.set()
+        try:
+            asyncio.create_task(dp.stop_polling())
+        except RuntimeError:  # polling ещё не начался
+            pass
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, request_shutdown)
+        except (NotImplementedError, RuntimeError):  # pragma: no cover - не везде есть
+            pass
+
+    me = await wait_for_telegram(ctx.bot, shutdown)
+    if me is None:
+        log.info("остановлено до подключения к Telegram")
+        await ctx.bot.session.close()
+        return
 
     try:
         await dp.start_polling(ctx.bot, allowed_updates=dp.resolve_used_update_types())
     except TelegramUnauthorizedError:
         raise SystemExit(
-            "Telegram отклонил BOT_TOKEN. Проверьте значение в .env — "
+            "Telegram отклонил токен. Удалите его из "
+            f"{settings.credentials_file} или .env и запустите бота заново — "
             "новый токен выдаёт @BotFather командой /token."
         ) from None
     finally:
@@ -133,7 +222,5 @@ async def run() -> None:
 def main() -> None:
     try:
         asyncio.run(run())
-    except (KeyboardInterrupt, SystemExit) as exc:
-        if isinstance(exc, SystemExit) and exc.code:
-            raise
+    except KeyboardInterrupt:
         log.info("выход")

@@ -58,9 +58,16 @@ def clock(ts: float | None) -> str:
     return time.strftime("%H:%M:%S", time.localtime(ts))
 
 
-def status_text(state: AppState, hunter: Hunter, simulate: bool = False) -> str:
+def status_text(state: AppState, hunter: Hunter, credentials=None) -> str:
     stats = state.stats
     settings = state.settings
+
+    if credentials is not None and not credentials.configured:
+        return (
+            "☁️ <b>Облако не подключено</b>\n\n"
+            "Бот спросит доступы сам — нажмите кнопку ниже или отправьте "
+            "/connect. Быстрее всего прислать содержимое openrc-файла."
+        )
 
     if hunter.running:
         head = "🟢 <b>Охота идёт</b>"
@@ -70,7 +77,7 @@ def status_text(state: AppState, hunter: Hunter, simulate: bool = False) -> str:
         head = "⚪️ <b>Охота остановлена</b>"
 
     lines = [head]
-    if simulate:
+    if credentials is not None and credentials.simulate:
         lines.append("<i>режим симуляции — реальные порты не создаются</i>")
     lines.append("")
 
@@ -268,6 +275,8 @@ HELP = """<b>VK IP Hunter</b>
 /vm — создать ВМ на найденном порту
 /settings — параметры цикла
 /targets — целевые диапазоны и исключения
+/connect — подключить VK Cloud (спрошу доступы здесь же)
+/disconnect — забыть доступы к облаку
 /cloud — проверить доступ к облаку
 /whoami — мой Telegram ID
 
