@@ -1,0 +1,26 @@
+[Unit]
+Description=VK IP Hunter HTTP panel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vkiphunter
+Group=vkiphunter
+WorkingDirectory=/opt/vkiphunter
+EnvironmentFile=/opt/vkiphunter/.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/vkiphunter/.venv/bin/python -m vkiphunter.web
+Restart=on-failure
+RestartSec=5
+# Finish the current allocation / VM operation before stopping.
+TimeoutStopSec=2100
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/vkiphunter/data
+
+[Install]
+WantedBy=multi-user.target

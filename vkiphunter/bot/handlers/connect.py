@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import re
 from html import escape
 
 from aiogram import F, Router
@@ -17,6 +16,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from ...cloud import CloudError
+from ...openrc import parse_openrc
 from ...secrets import (
     METHOD_APPCRED,
     METHOD_PASSWORD,
@@ -64,20 +64,6 @@ def _kb(*rows: tuple[str, str]) -> InlineKeyboardMarkup:
         ]
         + [[InlineKeyboardButton(text="✖️ Отмена", callback_data="conn:cancel")]]
     )
-
-
-def parse_openrc(text: str) -> dict[str, str]:
-    """Выдрать OS_*-переменные из содержимого openrc-файла."""
-    found: dict[str, str] = {}
-    pattern = re.compile(
-        r"^\s*(?:export\s+)?(OS_[A-Z0-9_]+)\s*=\s*(.*?)\s*$", re.MULTILINE
-    )
-    for name, raw in pattern.findall(text):
-        value = raw.strip().strip('"').strip("'")
-        if value.startswith("$") or not value:
-            continue
-        found[name] = value
-    return found
 
 
 async def connect_intro(event: Event, ctx: AppContext) -> None:
@@ -399,3 +385,4 @@ def build_router():
     router.message.register(on_appcred_secret, Connect.appcred_secret)
     router.message.register(on_region, Connect.region)
     return router
+
