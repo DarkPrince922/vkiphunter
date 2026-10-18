@@ -27,6 +27,12 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
+    # --- HTTP panel -----------------------------------------------------
+    web_host: str = Field(default="127.0.0.1", alias="WEB_HOST")
+    web_port: int = Field(default=8080, ge=1, le=65535, alias="WEB_PORT")
+    web_password: str = Field(default="", alias="WEB_PASSWORD", repr=False)
+    web_secure_cookie: bool = Field(default=False, alias="WEB_SECURE_COOKIE")
+
     # --- Telegram -------------------------------------------------------
     bot_token: str = Field(default="", alias="BOT_TOKEN")
     allowed_user_ids: str = Field(default="", alias="ALLOWED_USER_IDS")
@@ -128,3 +134,4 @@ class Settings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()  # type: ignore[call-arg]
+

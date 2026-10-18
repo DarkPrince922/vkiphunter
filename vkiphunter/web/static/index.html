@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VK IP Hunter — панель</title><link rel="stylesheet" href="/static/style.css"><script src="/static/app.js" defer></script></head>
+<body>
+<div id="login-view" class="login-wrap">
+  <form id="login-form" class="card login-card"><div class="brand-mark">VK / IP</div><p class="eyebrow">ОБЛАЧНЫЙ КОНТРОЛЬ</p><h1>VK IP Hunter</h1><p class="muted">Войдите, чтобы управлять поиском адресов в своём проекте VK Cloud.</p><label>Пароль панели<input name="password" type="password" required autocomplete="current-password"></label><button type="submit">Войти в панель →</button><p id="login-error" role="alert"></p></form>
+</div>
+<div id="app-view" hidden>
+  <header><a class="brand" href="/">VK <span>IP HUNTER</span></a><div class="header-right"><span id="connection-label">Загрузка…</span><button id="logout" class="quiet">Выйти</button></div></header>
+  <main>
+    <div class="intro"><div><p class="eyebrow">ВАШ ПРОЕКТ · ВАШИ АДРЕСА</p><h1>Панель управления</h1><p id="account" class="muted">Подключите VK Cloud, выберите диапазоны и запустите поиск.</p></div><span id="status" class="badge">Остановлен</span></div>
+    <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+    <section class="card hunt-card"><div><h2>Поиск адреса</h2><p class="muted">Неподходящие пробные адреса освобождаются. Найденные сохраняются.</p><p id="next-attempt" class="mono"></p></div><div class="actions"><button id="start">Запустить поиск</button><button id="stop" class="secondary">Остановить</button></div></section>
+    <section class="stats" aria-label="Статистика за всё время"><div class="card"><span>Попытки</span><strong id="stat-attempts">0</strong></div><div class="card"><span>Найдено</span><strong id="stat-matches">0</strong></div><div class="card"><span>Пул пуст · 409</span><strong id="stat-pool_empty">0</strong></div><div class="card"><span>Ошибки / квота</span><strong id="stat-errors">0 / 0</strong></div></section>
+    <nav class="tabs" aria-label="Разделы"><button class="tab active" data-tab="overview">Обзор</button><button class="tab" data-tab="settings">Настройки поиска</button><button class="tab" data-tab="cloud">Подключение</button><button class="tab" data-tab="resources">Облако и ВМ</button></nav>
+    <section id="tab-overview" class="tab-panel">
+      <article class="card"><div class="section-heading"><div><h2>Найденные адреса</h2><p class="muted">Эти ресурсы защищены от уборки.</p></div><span class="small muted">Обновление каждые 3 секунды</span></div><div id="found-table" class="table-wrap"></div></article>
+      <article class="card"><h2>Последние попытки</h2><div id="history-table" class="table-wrap"></div></article>
+      <details class="card"><summary>Повторно выданные IP</summary><div id="seen-table" class="table-wrap"></div></details>
+      <article class="card"><div class="section-heading"><h2>Журнал</h2><button id="load-logs" class="quiet">Обновить</button></div><pre id="logs">Нажмите «Обновить», чтобы прочитать последние 150 строк.</pre></article>
+    </section>
+    <section id="tab-settings" class="tab-panel" hidden>
+      <form id="settings-form" class="card"><h2>Параметры поиска</h2><p class="muted">Изменения доступны после полной остановки поиска.</p><fieldset id="settings-fields"><div class="form-grid">
+        <label>Способ выделения<select name="mode"><option value="port">Порт во внешней сети</option><option value="floatingip">Floating IP</option></select></label>
+        <label>Внешняя сеть<input name="network" required maxlength="128"></label>
+        <label>Префикс пробных ресурсов<input name="prefix" required pattern="[A-Za-z0-9][A-Za-z0-9_-]{2,63}"><small>3–64 символа: латиница, цифры, _ и -</small></label>
+        <label>Интервал каждого воркера, с<input name="interval" type="number" min="1" max="86400" required></label>
+        <label>Воркеры<input name="workers" type="number" min="1" max="8" required></label>
+        <label>Лимит попыток (0 — без лимита)<input name="max_attempts" type="number" min="0" max="10000000" required></label>
+        <label>Тайм-аут выделения, с<input name="port_timeout" type="number" min="10" max="600" required></label>
+        <label>Тайм-аут создания ВМ, с<input name="server_timeout" type="number" min="60" max="1800" required></label>
+        <label>Загрузочный диск ВМ, ГБ<input name="volume_size" type="number" min="1" max="10000" required></label>
+        <label>Тип диска (необязательно)<input name="volume_type" maxlength="256"></label>
+        <label>Шаг отчёта движка<input name="report_every" type="number" min="1" max="10000" required><small>Панель обновляется независимо от этого значения.</small></label>
+      </div><div class="form-grid"><label>Целевые CIDR<textarea name="targets" rows="6" required spellcheck="false"></textarea><small>IPv4, через пробел, запятую или с новой строки</small></label><label>Исключения<textarea name="excludes" rows="6" spellcheck="false"></textarea><small>Исключения имеют приоритет над целями.</small></label></div>
+      <h3>Подсети внешней сети</h3><p class="muted">Без выбора адрес запрашивается из любого доступного пула. После смены сети загрузите подсети заново.</p><button type="button" id="load-subnets" class="secondary">Загрузить подсети и доступность</button><div id="subnet-options" class="subnet-options"></div><p id="selected-subnets" class="small muted"></p><button type="submit">Сохранить настройки</button></fieldset></form>
+    </section>
+    <section id="tab-cloud" class="tab-panel" hidden>
+      <form id="cloud-form" class="card"><h2>Подключение VK Cloud</h2><p id="cloud-description" class="muted"></p><label>Способ<select name="method"><option value="password">OpenRC / логин и пароль</option><option value="appcred">Application credential</option><option value="simulate">Симуляция без облака</option></select></label>
+      <div id="real-cloud-fields"><label>Содержимое OpenRC (необязательно)<textarea name="openrc" rows="5" spellcheck="false" placeholder="export OS_AUTH_URL=…&#10;export OS_PROJECT_ID=…"></textarea><small>Файл разбирается как текст. Shell-команды не выполняются.</small></label><div class="form-grid">
+        <label>Auth URL<input name="auth_url" type="url" placeholder="HTTPS-адрес из OpenRC"></label><label>Регион<input name="region" value="RegionOne"></label>
+        <label data-method="password">Логин<input name="username" autocomplete="off"></label><label data-method="password">Пароль облака<input name="password" type="password" autocomplete="new-password"></label>
+        <label data-method="password">Project ID<input name="project_id"></label><label data-method="password">Project name (если нет ID)<input name="project_name"></label><label data-method="password">User domain name<input name="user_domain_name" value="users"></label>
+        <label data-method="appcred" hidden>Application credential ID<input name="app_cred_id" autocomplete="off"></label><label data-method="appcred" hidden>Application credential secret<input name="app_cred_secret" type="password" autocomplete="new-password"></label>
+      </div></div><p class="small muted">Доступы сохраняются на сервере только после успешной проверки. По HTTP они передаются без шифрования; используйте доверенную сеть, SSH-туннель или HTTPS.</p><button type="submit">Проверить и подключить</button><button type="button" id="disconnect" class="quiet danger-text">Забыть подключение</button></form>
+    </section>
+    <section id="tab-resources" class="tab-panel" hidden>
+      <article class="card"><h2>Ресурсы проекта</h2><div class="actions wrap"><button class="secondary" data-load="check">Проверить подключение</button><button class="secondary" data-load="networks">Внешние сети</button><button class="secondary" data-load="availability">Доступность пулов</button><button class="secondary" data-load="ports">Порты</button><button class="secondary" data-load="floatingips">Floating IP</button><button class="secondary" data-load="servers">Виртуальные машины</button></div><div id="resource-output" class="table-wrap"></div><hr><button id="cleanup" class="danger">Освободить свои пробные ресурсы</button><p class="small muted">По текущему способу и префиксу. Найденные и подключённые ресурсы пропускаются.</p></article>
+      <form id="vm-form" class="card"><div class="section-heading"><h2>Создать ВМ на найденном порту</h2><button id="load-catalog" type="button" class="quiet">Загрузить каталог</button></div><p class="muted">ВМ и диски тарифицируются облаком. Поиск должен быть остановлен.</p><div class="form-grid"><label>Найденный порт<select name="port_id" id="vm-port" required></select></label><label>Имя ВМ<input name="name" required maxlength="128" value="vk-direct"></label><label>Флейвор<select name="flavor_id" id="vm-flavor" required></select></label><label>Образ<select name="image_id" id="vm-image" required></select></label><label>SSH-ключ<select name="key_name" id="vm-key"><option value="">Без ключа</option></select></label></div><p class="small muted">Размер и тип загрузочного диска задаются в настройках поиска. Создание может занять до 30 минут; результат появится после завершения.</p><button type="submit">Создать ВМ…</button></form>
+      <form id="attach-form" class="card"><div class="section-heading"><h2>Привязать найденный Floating IP</h2><button id="load-servers" type="button" class="quiet">Загрузить ВМ</button></div><div class="form-grid"><label>Найденный Floating IP<select name="port_id" id="attach-ip" required></select></label><label>Существующая ВМ<select name="server_id" id="attach-server" required></select></label></div><button type="submit">Привязать адрес…</button></form>
+    </section>
+    <footer>VK IP Hunter · Поиск не возобновляется автоматически после перезапуска сервера.</footer>
+  </main>
+</div>
+</body></html>
