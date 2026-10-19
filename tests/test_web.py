@@ -234,3 +234,68 @@ async def test_state_redacts_secrets_before_json_encoding(panel):
     data = await result.json()
     assert secret not in data['last_error']
     assert '[скрыто]' in data['last_error']
+
+
+async def test_native_post_login_sets_session_without_password_in_url(panel):
+    client, rt = panel
+    origin = str(client.make_url('/')).rstrip('/')
+    # Native form submission must work even while a cloud operation is busy.
+    async with rt.mutation:
+        result = await client.post('/login', data={'password': PASSWORD},
+                                   headers={'Origin': origin}, allow_redirects=False)
+    assert result.status == 303
+    assert result.headers['Location'] == '/'
+    assert PASSWORD not in result.headers['Location']
+    assert result.cookies[COOKIE]['httponly']
+    state = await client.get('/api/state')
+    assert state.status == 200
+    assert (await state.json())['csrf']
+
+
+async def test_native_login_rejects_cross_site_and_missing_origin(panel):
+    client, _ = panel
+    for headers in ({}, {'Origin': 'https://evil.example'}):
+        result = await client.post('/login', data={'password': PASSWORD}, headers=headers)
+        assert result.status == 403
+    assert (await client.get('/api/state')).status == 401
+
+
+async def test_native_login_errors_are_visible_and_share_rate_limit(panel):
+    client, _ = panel
+    origin = str(client.make_url('/')).rstrip('/')
+    for _ in range(9):
+        response = await client.post('/api/login', json={'password': 'wrong'}, headers={'X-VKH-Request':'1'})
+        assert response.status == 401
+    response = await client.post('/login', data={'password': 'private-wrong-password'},
+                                 headers={'Origin': origin})
+    assert response.status == 401 and response.content_type == 'text/html'
+    html = await response.text()
+    assert 'Неверный пароль' in html and 'private-wrong-password' not in html
+    result = await client.post('/login', data={'password': PASSWORD}, headers={'Origin': origin})
+    assert result.status == 429
+    assert 'Подождите минуту' in await result.text()
+
+
+async def test_old_password_query_redirects_without_logging_in(panel):
+    client, _ = panel
+    response = await client.get('/', params={'password': PASSWORD}, allow_redirects=False)
+    assert response.status == 303 and response.headers['Location'] == '/'
+    assert PASSWORD not in await response.text()
+    assert (await client.get('/api/state')).status == 401
+
+
+@pytest.mark.parametrize('host,origin,expected', [
+    ('panel.example:80', 'http://panel.example', 200),
+    ('panel.example', 'http://panel.example:80', 200),
+    ('panel.example:18080', 'http://panel.example:18080', 200),
+    ('panel.example:18080', 'http://panel.example', 403),
+    ('panel.example', 'https://panel.example', 200),
+    ('panel.example', 'null', 403),
+    ('panel.example', 'https://evil.example', 403),
+])
+async def test_login_origin_ports(panel, host, origin, expected):
+    client, _ = panel
+    result = await client.post('/api/login', json={'password': PASSWORD}, headers={
+        'X-VKH-Request': '1', 'Origin': origin, 'Host': host,
+    })
+    assert result.status == expected

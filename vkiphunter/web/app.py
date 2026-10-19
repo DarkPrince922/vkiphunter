@@ -9,6 +9,7 @@ import secrets
 import time
 from collections import OrderedDict
 from dataclasses import asdict
+from html import escape
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -95,17 +96,39 @@ async def boundary(request, handler):
     return response
 
 
+def check_origin(request, *, required=False):
+    origin = request.headers.get("Origin")
+    if not origin:
+        if required:
+            raise web.HTTPForbidden(text="Откройте форму входа на этом сайте и повторите попытку")
+        return
+    try:
+        source = urlsplit(origin)
+        target = urlsplit("//" + request.host)
+        default_port = {"http": 80, "https": 443}.get(source.scheme)
+        matches = (default_port and source.hostname == target.hostname
+                   and (source.port or default_port) == (target.port or default_port)
+                   and not source.username and not source.password)
+    except ValueError:
+        matches = False
+    if not matches:
+        raise web.HTTPForbidden(text="Запрос с другого сайта запрещён")
+
+
 @web.middleware
 async def security(request, handler):
     rt = request.app[RUNTIME]
+    form_login = request.method == "POST" and request.path == "/login"
     if request.method not in ("GET", "HEAD"):
-        if request.headers.get("X-VKH-Request") != "1":
-            raise web.HTTPForbidden(text="Отсутствует защитный заголовок")
-        if request.content_type != "application/json":
-            raise web.HTTPUnsupportedMediaType(text="Нужен application/json")
-        origin = request.headers.get("Origin")
-        if origin and urlsplit(origin).netloc != request.host:
-            raise web.HTTPForbidden(text="Запрос с другого сайта запрещён")
+        check_origin(request, required=form_login)
+        if form_login:
+            if request.content_type != "application/x-www-form-urlencoded":
+                raise web.HTTPUnsupportedMediaType(text="Ожидается форма входа")
+        else:
+            if request.headers.get("X-VKH-Request") != "1":
+                raise web.HTTPForbidden(text="Отсутствует защитный заголовок")
+            if request.content_type != "application/json":
+                raise web.HTTPUnsupportedMediaType(text="Нужен application/json")
     if request.path.startswith("/api/") and request.path != "/api/login":
         session = rt.sessions.get(request.cookies.get(COOKIE, ""))
         if not session or session[0] < time.time():
@@ -119,7 +142,7 @@ async def security(request, handler):
 
 @web.middleware
 async def serialize_writes(request, handler):
-    if request.method == "POST" and request.path not in ("/api/login", "/api/logout"):
+    if request.method == "POST" and request.path not in ("/api/login", "/api/logout", "/login"):
         rt = request.app[RUNTIME]
         if rt.mutation.locked():
             raise web.HTTPConflict(text="Операция уже выполняется. Дождитесь её завершения.")
@@ -132,9 +155,9 @@ async def payload(request, model):
     return model.model_validate(await request.json())
 
 
-async def login(request):
+def authorize(request, password):
+    """Both JSON and HTML logins use the same password check and rate limit."""
     rt = request.app[RUNTIME]
-    data = await payload(request, LoginInput)
     now = time.time()
     remote = request.remote or "unknown"  # Never trust client-supplied forwarding headers.
     failures = [t for t in rt.failures.pop(remote, []) if t > now - 60]
@@ -143,10 +166,15 @@ async def login(request):
         rt.failures.popitem(last=False)
     if len(failures) >= 10:
         raise web.HTTPTooManyRequests(text="Слишком много попыток. Подождите минуту.")
-    if not secrets.compare_digest(data.password.encode(), rt.settings.web_password.encode()):
+    if not secrets.compare_digest(password.encode(), rt.settings.web_password.encode()):
         failures.append(now)
         raise web.HTTPUnauthorized(text="Неверный пароль")
     rt.failures.pop(remote, None)
+
+
+def new_session(request):
+    rt = request.app[RUNTIME]
+    now = time.time()
     for token, session in list(rt.sessions.items()):
         if session[0] < now:
             rt.sessions.pop(token, None)
@@ -155,10 +183,40 @@ async def login(request):
     rt.sessions[token] = (now + SESSION_TTL, csrf)
     while len(rt.sessions) > 32:
         rt.sessions.popitem(last=False)
-    response = web.json_response({"csrf": csrf})
+    return token, csrf
+
+
+def session_cookie(request, response, token):
     response.set_cookie(COOKIE, token, httponly=True, samesite="Strict",
-                        secure=rt.settings.web_secure_cookie, max_age=SESSION_TTL, path="/")
+                        secure=request.app[RUNTIME].settings.web_secure_cookie,
+                        max_age=SESSION_TTL, path="/")
     return response
+
+
+async def login(request):
+    data = await payload(request, LoginInput)
+    authorize(request, data.password)
+    token, csrf = new_session(request)
+    return session_cookie(request, web.json_response({"csrf": csrf}), token)
+
+
+async def login_form(request):
+    # Native POST fallback also works if the script is still downloading.
+    # Never accept passwords from the query string or put them in redirects.
+    form = await request.post()
+    try:
+        data = LoginInput.model_validate({"password": form.get("password")})
+        authorize(request, data.password)
+    except (ValidationError, web.HTTPException) as exc:
+        message = exc.text if isinstance(exc, web.HTTPException) else "Введите пароль панели"
+        page = (STATIC / "index.html").read_text("utf-8").replace(
+            '<p id="login-error" role="alert"></p>',
+            '<p id="login-error" role="alert">' + escape(message) + '</p>',
+        )
+        return web.Response(text=page, content_type="text/html",
+                            status=exc.status if isinstance(exc, web.HTTPException) else 400)
+    token, _ = new_session(request)
+    return session_cookie(request, web.Response(status=303, headers={"Location": "/"}), token)
 
 
 async def logout(request):
@@ -384,6 +442,8 @@ async def health(request):
 
 
 async def index(request):
+    if "password" in request.query:
+        return web.Response(status=303, headers={"Location": "/"})
     return web.FileResponse(STATIC / "index.html")
 
 
@@ -427,6 +487,7 @@ def create_app(settings: Settings | None = None):
     app[RUNTIME] = Runtime(settings)
     app.cleanup_ctx.append(lifecycle)
     app.router.add_get("/", index)
+    app.router.add_post("/login", login_form)
     app.router.add_get("/static/{name}", asset)
     app.router.add_get("/healthz", health)
     for path, handler in {
