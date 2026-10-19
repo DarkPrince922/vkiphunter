@@ -1,5 +1,6 @@
 """Strict validation at the HTTP boundary."""
 from typing import Annotated, Literal
+from ipaddress import IPv4Address
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -75,3 +76,14 @@ class CreateVM(ConfirmInput):
 class AttachIP(ConfirmInput):
     port_id: Text
     server_id: Annotated[str, Field(min_length=1, max_length=128)]
+
+
+class DeleteIP(ConfirmInput):
+    resource_id: Annotated[str, Field(min_length=1, max_length=128)]
+    kind: Literal["port", "floatingip"]
+    ip: Text
+
+    @field_validator('ip')
+    @classmethod
+    def ipv4(cls, value):
+        return str(IPv4Address(value))

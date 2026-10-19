@@ -2,6 +2,7 @@
 const $ = (id) => document.getElementById(id);
 let csrf = '', current = null, settingsLoaded = false, pollTimer = null;
 let authGeneration = 0, pollController = null, loginPending = false;
+let resourceView = null;
 const labels = {idle:'Остановлен',running:'Поиск идёт',stopping:'Завершаем попытку',match:'Найден',reject:'Не подходит',pool_empty:'Пул пуст',error:'Ошибка',quota:'Квота'};
 const date = (ts) => ts ? new Date(ts * 1000).toLocaleString('ru-RU') : '—';
 function notify(message, error=false) { $('notice').textContent=message; $('notice').classList.toggle('error',error); $('notice').hidden=false; }
@@ -59,7 +60,7 @@ function table(container, columns, rows) {
   const t=document.createElement('table'),head=t.createTHead().insertRow();
   columns.forEach(([title])=>{const th=document.createElement('th'); th.textContent=title; head.append(th);});
   const body=t.createTBody();
-  rows.forEach(item=>{const tr=body.insertRow(); columns.forEach(([,value])=>{const cell=tr.insertCell(); const v=typeof value==='function'?value(item):item[value]; cell.textContent=v==null?'—':(typeof v==='object'?JSON.stringify(v):String(v));});});
+  rows.forEach(item=>{const tr=body.insertRow(); columns.forEach(([,value])=>{const cell=tr.insertCell(); const v=typeof value==='function'?value(item):item[value]; if(v instanceof Node) cell.append(v); else cell.textContent=v==null?'—':(typeof v==='object'?JSON.stringify(v):String(v));});});
   container.append(t);
 }
 function options(select, items, text, value) {
@@ -98,12 +99,15 @@ function render(data) {
   $('vm-form').querySelector('button[type=submit]').disabled=data.running||data.busy;
   $('attach-form').querySelector('button[type=submit]').disabled=data.running||data.busy;
   if(!settingsLoaded) fillSettings(data.settings);
-  table($('found-table'),[['Адрес','ip'],['Тип',x=>x.kind==='port'?'Порт':'Floating IP'],['Диапазон','matched_cidr'],['Ресурс','port_id'],['Найден',x=>date(x.found_at)],['ВМ',x=>x.server_name||x.server_id||'Не подключён']],data.found.slice().reverse());
+  table($('found-table'),[['Адрес','ip'],['Тип',x=>x.kind==='port'?'Порт':'Floating IP'],['Диапазон','matched_cidr'],['Ресурс','port_id'],['Найден',x=>date(x.found_at)],['ВМ',x=>x.server_name||x.server_id||'Не подключён'],['Действие',x=>deleteIPButton(x.port_id,x.kind,x.ip)]],data.found.slice().reverse());
   table($('history-table'),[['Время',x=>date(x.ts)],['IP','ip'],['Результат',x=>labels[x.outcome]||x.outcome],['Подсеть','subnet'],['Причина','detail']],data.attempts.slice().reverse());
   table($('seen-table'),[['IP','ip'],['Число выдач','count']],Object.entries(data.stats.seen_ips).map(([ip,count])=>({ip,count})).sort((a,b)=>b.count-a.count));
   const free=data.found.filter(f=>!f.server_id);
   options($('vm-port'),free.filter(f=>f.kind==='port'),f=>`${f.ip} · ${f.port_id}`,f=>f.port_id);
   options($('attach-ip'),free.filter(f=>f.kind==='floatingip'),f=>`${f.ip} · ${f.port_id}`,f=>f.port_id);
+  document.querySelectorAll('button[data-ip-delete]').forEach(button=>{
+    button.disabled=button.dataset.attached==='true' || button.dataset.hasIp==='false' || !data.connected || data.running || data.busy;
+  });
 }
 async function refresh(options={}) {
   const generation=authGeneration;
@@ -128,7 +132,7 @@ async function poll(initial=false) {
     }
   } catch (error) {
     if (generation!==authGeneration || controller.signal.aborted) return;
-    if (error.status===401) showLogin(initial ? null : 'Сессия истекла или сервер перезапущен. Войдите снова.');
+    if (error.status===401) showLogin(initial ? null : 'Сессия истекла или была отозвана. Войдите снова.');
     else if ($('app-view').hidden) showLogin(error.message);
     else notify('Не удалось обновить статус: '+error.message,true);
   } finally {
@@ -141,7 +145,7 @@ async function poll(initial=false) {
 async function action(fn) {
   try { await fn(); }
   catch(error) {
-    if (error.status===401) showLogin('Сессия истекла или сервер перезапущен. Войдите снова.');
+    if (error.status===401) showLogin('Сессия истекла или была отозвана. Войдите снова.');
     else if ($('app-view').hidden) $('login-error').textContent=error.message;
     else notify(error.message,true);
   }
@@ -234,8 +238,47 @@ $('cloud-form').addEventListener('submit',e=>{e.preventDefault(); busyButton(e.s
 });});
 $('disconnect').addEventListener('click',e=>busyButton(e.target,async()=>{if(!confirm('Забыть сохранённые доступы к облаку? Ресурсы останутся в проекте.')) return; await api('disconnect',{confirm:true}); await refresh(); notify('Сохранённые доступы удалены.');}));
 const resourceNames={id:'ID',name:'Название',ip:'IP',cidr:'CIDR',free:'Свободно',total:'Всего',used:'Занято',status:'Статус',device_id:'Подключено к',description:'Описание',external:'Внешняя',project_name:'Проект',region:'Регион'};
-function renderResources(data) { const rows=Array.isArray(data)?data:[data]; const keys=[...new Set(rows.flatMap(x=>Object.keys(x)))]; table($('resource-output'),keys.map(k=>[resourceNames[k]||k,k]),rows); }
-document.querySelectorAll('[data-load]').forEach(b=>b.addEventListener('click',()=>busyButton(b,async()=>renderResources(await api('cloud/'+b.dataset.load)))));
+function deleteIPButton(id, kind, ip, attached=false) {
+  const button=document.createElement('button');
+  button.type='button';
+  button.className='quiet danger-text';
+  button.textContent='Удалить IP…';
+  button.dataset.ipDelete='1';
+  button.dataset.attached=String(attached);
+  button.dataset.hasIp=String(Boolean(ip));
+  button.disabled=!ip || attached || !current?.connected || current.running || current.busy;
+  if (attached) button.title='Сначала отвяжите адрес в VK Cloud';
+  button.addEventListener('click',()=>busyButton(button,async()=>{
+    if (!confirm(`Безвозвратно освободить IP ${ip}?\nАдрес вернётся в пул облака. Получить его повторно не гарантируется.\nУдаление также уберёт его из найденных адресов.`)) return;
+    const result=await api('ip/delete',{resource_id:id,kind,ip,confirm:true});
+    await refresh();
+    if (resourceView==='ports' || resourceView==='floatingips') await loadResource(resourceView);
+    notify(result.already_absent?`IP ${ip} уже отсутствует в облаке. Запись удалена из найденных.`:`IP ${ip} освобождён и удалён из найденных.`);
+  }));
+  return button;
+}
+function renderResources(data, name) {
+  const rows=Array.isArray(data)?data:[data];
+  const keys=[...new Set(rows.flatMap(x=>Object.keys(x)))];
+  const columns=keys.map(k=>[resourceNames[k]||k,k]);
+  if (name==='ports' || name==='floatingips') {
+    const floating=name==='floatingips';
+    columns.push(['Действие',item=>{
+      const label=(floating?item.description:item.name)||'';
+      const kind=floating?'floatingip':'port';
+      const found=current?.found.some(f=>f.port_id===item.id && f.kind===kind);
+      if (!found && !label.startsWith(current.settings.prefix+'-')) return '—';
+      return deleteIPButton(item.id,kind,item.ip,Boolean(floating?item.port_id:item.device_id));
+    }]);
+  }
+  table($('resource-output'),columns,rows);
+}
+async function loadResource(name) {
+  const data=await api('cloud/'+name);
+  resourceView=name;
+  renderResources(data,name);
+}
+document.querySelectorAll('[data-load]').forEach(b=>b.addEventListener('click',()=>busyButton(b,async()=>loadResource(b.dataset.load))));
 $('cleanup').addEventListener('click',e=>busyButton(e.target,async()=>{if(!confirm('Освободить свои неподключённые пробные ресурсы по текущему префиксу? Найденные будут сохранены.')) return; const result=await api('cleanup',{confirm:true}); notify(`Удалено: ${result.deleted.length}. Не удалось удалить: ${result.failed.length}.`,result.failed.length>0); }));
 $('load-logs').addEventListener('click',e=>busyButton(e.target,async()=>{$('logs').textContent=(await api('logs')).text||'Журнал пока пуст.';}));
 $('load-catalog').addEventListener('click',e=>busyButton(e.target,async()=>{
