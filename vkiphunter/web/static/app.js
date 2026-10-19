@@ -1,15 +1,57 @@
 'use strict';
 const $ = (id) => document.getElementById(id);
 let csrf = '', current = null, settingsLoaded = false, pollTimer = null;
+let authGeneration = 0, pollController = null, loginPending = false;
 const labels = {idle:'Остановлен',running:'Поиск идёт',stopping:'Завершаем попытку',match:'Найден',reject:'Не подходит',pool_empty:'Пул пуст',error:'Ошибка',quota:'Квота'};
 const date = (ts) => ts ? new Date(ts * 1000).toLocaleString('ru-RU') : '—';
 function notify(message, error=false) { $('notice').textContent=message; $('notice').classList.toggle('error',error); $('notice').hidden=false; }
-function showLogin() { clearTimeout(pollTimer); $('app-view').hidden=true; $('login-view').hidden=false; csrf=''; }
-async function api(path, data) {
-  const response=await fetch('/api/'+path,{method:data===undefined?'GET':'POST',credentials:'same-origin',headers:data===undefined?{}:{'Content-Type':'application/json','X-VKH-Request':'1','X-CSRF-Token':csrf},body:data===undefined?undefined:JSON.stringify(data)});
-  const result=await response.json();
-  if (!response.ok) { if(response.status===401 && path!=='login') showLogin(); throw new Error(result.error || `HTTP ${response.status}`); }
-  return result;
+function stopPolling() {
+  clearTimeout(pollTimer);
+  pollTimer = null;
+  if (pollController) pollController.abort();
+  pollController = null;
+}
+function showLogin(message=null) {
+  authGeneration++;
+  stopPolling();
+  $('app-view').hidden=true;
+  $('login-view').hidden=false;
+  $('login-status').textContent='';
+  if (message!==null) $('login-error').textContent=message;
+  csrf='';
+}
+class ApiError extends Error {
+  constructor(message, status=0) { super(message); this.status=status; }
+}
+async function api(path, data, {signal, timeout=0}={}) {
+  const controller=new AbortController();
+  const abort=()=>controller.abort();
+  let timedOut=false;
+  if (signal?.aborted) abort();
+  else signal?.addEventListener('abort',abort,{once:true});
+  const timer=timeout ? setTimeout(()=>{timedOut=true; controller.abort();},timeout) : null;
+  try {
+    const response=await fetch('/api/'+path,{
+      method:data===undefined?'GET':'POST', credentials:'same-origin', cache:'no-store',
+      headers:data===undefined?{}:{'Content-Type':'application/json','X-VKH-Request':'1','X-CSRF-Token':csrf},
+      body:data===undefined?undefined:JSON.stringify(data), signal:controller.signal,
+    });
+    let result;
+    try { result=await response.json(); }
+    catch (error) {
+      if (controller.signal.aborted) throw error;
+      throw new ApiError(`Сервер вернул некорректный ответ (HTTP ${response.status}). Попробуйте ещё раз.`,response.status);
+    }
+    if (!response.ok) throw new ApiError(result.error || `HTTP ${response.status}`,response.status);
+    return result;
+  } catch (error) {
+    if (timedOut) throw new ApiError('Сервер не ответил за 15 секунд. Проверьте соединение и повторите попытку.');
+    if (signal?.aborted || error instanceof ApiError) throw error;
+    throw new ApiError('Не удалось связаться с сервером. Проверьте соединение и повторите попытку.');
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort',abort);
+  }
 }
 function table(container, columns, rows) {
   container.replaceChildren();
@@ -63,16 +105,102 @@ function render(data) {
   options($('vm-port'),free.filter(f=>f.kind==='port'),f=>`${f.ip} · ${f.port_id}`,f=>f.port_id);
   options($('attach-ip'),free.filter(f=>f.kind==='floatingip'),f=>`${f.ip} · ${f.port_id}`,f=>f.port_id);
 }
-async function refresh() { render(await api('state')); }
-async function poll() {
-  clearTimeout(pollTimer);
-  try { await refresh(); } catch(e) { if(!$('app-view').hidden) notify('Не удалось обновить статус: '+e.message,true); }
-  if(!$('app-view').hidden) pollTimer=setTimeout(poll,3000);
+async function refresh(options={}) {
+  const generation=authGeneration;
+  const data=await api('state',undefined,{...options,timeout:15000});
+  if (generation===authGeneration) render(data);
 }
-async function action(fn) { try { await fn(); } catch(e) { notify(e.message,true); } }
+function schedulePoll() {
+  clearTimeout(pollTimer);
+  if (!$('app-view').hidden) pollTimer=setTimeout(poll,3000);
+}
+async function poll(initial=false) {
+  stopPolling();
+  const generation=authGeneration;
+  const controller=new AbortController();
+  pollController=controller;
+  if (initial) $('login-status').textContent='Проверяем сессию…';
+  try {
+    await refresh({signal:controller.signal});
+    if (generation===authGeneration) {
+      $('login-status').textContent='';
+      $('login-error').textContent='';
+    }
+  } catch (error) {
+    if (generation!==authGeneration || controller.signal.aborted) return;
+    if (error.status===401) showLogin(initial ? null : 'Сессия истекла или сервер перезапущен. Войдите снова.');
+    else if ($('app-view').hidden) showLogin(error.message);
+    else notify('Не удалось обновить статус: '+error.message,true);
+  } finally {
+    if (generation===authGeneration) {
+      pollController=null;
+      schedulePoll();
+    }
+  }
+}
+async function action(fn) {
+  try { await fn(); }
+  catch(error) {
+    if (error.status===401) showLogin('Сессия истекла или сервер перезапущен. Войдите снова.');
+    else if ($('app-view').hidden) $('login-error').textContent=error.message;
+    else notify(error.message,true);
+  }
+}
 function busyButton(button, fn) { return action(async()=>{button.disabled=true; try { await fn(); } finally { button.disabled=false; }}); }
-$('login-form').addEventListener('submit',async e=>{e.preventDefault(); const button=e.submitter; button.disabled=true; $('login-error').textContent=''; try { const result=await api('login',{password:e.target.elements.password.value}); csrf=result.csrf; e.target.reset(); settingsLoaded=false; await poll(); } catch(err) { $('login-error').textContent=err.message; } finally { button.disabled=false; }});
-$('logout').addEventListener('click',()=>action(async()=>{await api('logout',{}); showLogin();}));
+$('login-form').addEventListener('submit',async event=>{
+  event.preventDefault();
+  if (loginPending) return;
+  loginPending=true;
+  authGeneration++;
+  stopPolling();
+  const generation=authGeneration;
+  const form=event.currentTarget;
+  const button=form.querySelector('button[type="submit"]');
+  const label=button.textContent;
+  let accepted=false;
+  button.disabled=true;
+  button.textContent='Входим…';
+  form.setAttribute('aria-busy','true');
+  $('login-error').textContent='';
+  $('login-status').textContent='Проверяем пароль…';
+  try {
+    const result=await api('login',{password:form.elements.password.value},{timeout:15000});
+    if (generation!==authGeneration) return;
+    accepted=true;
+    csrf=result.csrf;
+    settingsLoaded=false;
+    $('login-status').textContent='Открываем панель…';
+    // Do not use poll(): its recovery path must not swallow a login failure.
+    await refresh();
+    if (generation!==authGeneration) return;
+    form.reset();
+    $('login-status').textContent='';
+    schedulePoll();
+  } catch(error) {
+    if (generation!==authGeneration) return;
+    let message=error.message;
+    if (accepted && error.status===401) {
+      message='Пароль принят, но сессия не сохранилась. Разрешите cookie для сайта. При доступе по HTTP настройка WEB_SECURE_COOKIE на сервере должна быть false.';
+    } else if (accepted) {
+      message='Пароль принят, но не удалось открыть панель: '+message;
+    }
+    showLogin(message);
+  } finally {
+    loginPending=false;
+    button.disabled=false;
+    button.textContent=label;
+    form.removeAttribute('aria-busy');
+    $('login-status').textContent='';
+  }
+});
+$('logout').addEventListener('click',event=>busyButton(event.currentTarget,async()=>{
+  authGeneration++;
+  stopPolling();
+  try {
+    await api('logout',{}, {timeout:15000});
+    showLogin('Вы вышли из панели.');
+  } finally { schedulePoll(); }
+}));
 document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('active',x===b)); document.querySelectorAll('.tab-panel').forEach(x=>x.hidden=x.id!=='tab-'+b.dataset.tab); }));
 $('start').addEventListener('click',e=>busyButton(e.target,async()=>{await api('hunt/start',{}); notify('Поиск запущен. Статус обновляется автоматически.'); await refresh();}));
 $('stop').addEventListener('click',e=>busyButton(e.target,async()=>{await api('hunt/stop',{}); notify('Останавливаем поиск после текущей попытки.'); await refresh();}));
@@ -125,4 +253,8 @@ $('vm-form').addEventListener('submit',e=>{e.preventDefault(); busyButton(e.subm
   catch(err) { throw new Error(err.message+' Порт сохранён. Перед повтором проверьте список ВМ в облаке: создание могло завершиться после тайм-аута.'); }
 });});
 $('attach-form').addEventListener('submit',e=>{e.preventDefault(); busyButton(e.submitter,async()=>{const data=Object.fromEntries(new FormData(e.target)); if(!confirm('Привязать выбранный Floating IP к выбранной ВМ?')) return; await api('attach',{...data,confirm:true}); await refresh(); notify('Адрес привязан.');});});
-poll();
+// Remove links left by the old GET form without using the leaked password.
+if (new URLSearchParams(location.search).has('password')) {
+  history.replaceState(null,'',location.pathname+location.hash);
+}
+poll(true);

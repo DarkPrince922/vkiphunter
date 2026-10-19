@@ -46,10 +46,10 @@ adduser --system --group --home /opt/vkiphunter --no-create-home vkiphunter
 в качестве пароля вставьте **токен**, обычный пароль GitHub не подходит.
 Не вставляйте токен в URL и команды: он попадёт в историю терминала.
 
-До слияния PR используйте ветку веб-версии:
+Веб-версия находится в основной ветке репозитория:
 
 ```bash
-git clone --branch codex/http-web-panel https://github.com/DarkPrince922/vkiphunter.git /opt/vkiphunter
+git clone https://github.com/DarkPrince922/vkiphunter.git /opt/vkiphunter
 cd /opt/vkiphunter
 python3 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip
@@ -57,14 +57,13 @@ python3 -m venv .venv
 install -d -o vkiphunter -g vkiphunter -m 0700 /opt/vkiphunter/data
 ```
 
-После слияния PR можно клонировать основную ветку без `--branch`.
 Исходники и `.venv` могут принадлежать root; службе нужно записывать только
 в `data/`. Не запускайте бота и веб-панель одновременно с одной папкой `data/`.
 
 Если используете SSH, команда клонирования вместо HTTPS:
 
 ```bash
-git clone --branch codex/http-web-panel git@github.com:DarkPrince922/vkiphunter.git /opt/vkiphunter
+git clone git@github.com:DarkPrince922/vkiphunter.git /opt/vkiphunter
 ```
 
 ## 3. Пароль и конфигурация
@@ -378,7 +377,7 @@ systemctl start vkiphunter-web
 1. Остановите поиск в боте и `systemctl disable --now vkiphunter`.
    Если использовали супервизор: `./scripts/vkiphunterctl stop`.
 2. Сделайте резервную копию `data/` и `.env`.
-3. Получите ветку веб-версии, обновите зависимости и добавьте WEB_* в `.env`.
+3. Обновите основную ветку и зависимости, добавьте WEB_* в `.env`.
    Не выполняйте генератор нового `.env` поверх старого.
 4. Убедитесь, что `.env` читается службой и `data/` принадлежит `vkiphunter`.
    Для старых файлов: `chown -R vkiphunter:vkiphunter /opt/vkiphunter/data`.
@@ -400,6 +399,7 @@ systemctl start vkiphunter-web
 | IP не открывается | входящие 80/443 в UFW и security group; `ss -ltnp`, `nginx -t` |
 | Служба падает сразу | WEB_PASSWORD минимум 16 символов; права на `.env` и `data/`; установка requirements в `.venv` |
 | «Другой веб-процесс» | уже запущен экземпляр с тем же STATE_FILE; остановите лишний процесс, не удаляйте lock у работающей службы |
+| После пароля вход возвращается к форме | новая версия показывает причину под формой: проверьте cookie браузера, WEB_SECURE_COOKIE и журнал службы; после изменения .env перезапустите службу |
 | Не пускает после включения Secure cookie | открывайте HTTPS с доменом; для HTTP нужно WEB_SECURE_COOKIE=false и перезапуск |
 | «Слишком много попыток» | подождите минуту; за Nginx лимит действует суммарно для соединений через локальный прокси |
 | Облако не подключается | Auth URL/регион из вашего OpenRC, верный API-пароль или application secret, проект и права; доступ сервера к API |
@@ -419,4 +419,14 @@ systemctl start vkiphunter-web
 .venv/bin/python -m pytest -q
 ```
 
+Для проверки формы входа и JavaScript-сессии дополнительно нужен Node.js 24.15+
+(ветка 24 LTS; на рабочем сервере Node.js не требуется):
+
+```bash
+npm ci
+npm run test:web
+```
+
+Эти проверки включают вход с Enter, восстановление сессии, потерю cookie,
+сетевые ошибки, тайм-ауты, запоздалые ответы и выход из панели.
 Тесты не используют реальный VK Cloud и не создают платные ресурсы.

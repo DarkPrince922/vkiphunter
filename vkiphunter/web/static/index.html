@@ -3,7 +3,7 @@
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VK IP Hunter — панель</title><link rel="stylesheet" href="/static/style.css"><script src="/static/app.js" defer></script></head>
 <body>
 <div id="login-view" class="login-wrap">
-  <form id="login-form" class="card login-card"><div class="brand-mark">VK / IP</div><p class="eyebrow">ОБЛАЧНЫЙ КОНТРОЛЬ</p><h1>VK IP Hunter</h1><p class="muted">Войдите, чтобы управлять поиском адресов в своём проекте VK Cloud.</p><label>Пароль панели<input name="password" type="password" required autocomplete="current-password"></label><button type="submit">Войти в панель →</button><p id="login-error" role="alert"></p></form>
+  <form id="login-form" class="card login-card" method="post" action="/login"><div class="brand-mark">VK / IP</div><p class="eyebrow">ОБЛАЧНЫЙ КОНТРОЛЬ</p><h1>VK IP Hunter</h1><p class="muted">Войдите, чтобы управлять поиском адресов в своём проекте VK Cloud.</p><label>Пароль панели<input name="password" type="password" required autocomplete="current-password"></label><button type="submit">Войти в панель →</button><p id="login-status" class="small muted" role="status" aria-live="polite"></p><p id="login-error" role="alert"></p><noscript><p>Для работы панели включите JavaScript в браузере.</p></noscript></form>
 </div>
 <div id="app-view" hidden>
   <header><a class="brand" href="/">VK <span>IP HUNTER</span></a><div class="header-right"><span id="connection-label">Загрузка…</span><button id="logout" class="quiet">Выйти</button></div></header>
