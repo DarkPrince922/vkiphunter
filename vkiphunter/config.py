@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     web_port: int = Field(default=8080, ge=1, le=65535, alias="WEB_PORT")
     web_password: str = Field(default="", alias="WEB_PASSWORD", repr=False)
     web_secure_cookie: bool = Field(default=False, alias="WEB_SECURE_COOKIE")
+    web_session_days: int = Field(default=7, ge=1, le=365, alias="WEB_SESSION_DAYS")
 
     # --- Telegram -------------------------------------------------------
     bot_token: str = Field(default="", alias="BOT_TOKEN")

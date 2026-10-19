@@ -23,14 +23,14 @@ from ..logs import setup_logging, tail
 from ..openrc import parse_openrc
 from ..secrets import CloudCredentials, SecretStore
 from ..state import HuntSettings, MODE_FLOATING_IP, Store
+from .sessions import SessionStore
 from .models import (
-    AttachIP, ConfirmInput, ConnectionInput, CreateVM, HuntInput, LoginInput,
+    AttachIP, ConfirmInput, ConnectionInput, CreateVM, DeleteIP, HuntInput, LoginInput,
 )
 
 log = logging.getLogger(__name__)
 STATIC = Path(__file__).with_name("static")
 COOKIE = "vkh_session"
-SESSION_TTL = 12 * 3600
 
 
 class Runtime:
@@ -43,7 +43,10 @@ class Runtime:
         self.cloud = CloudProxy(self.credentials)
         self.hunter = Hunter(self.cloud, self.store)
         self.mutation = asyncio.Lock()
-        self.sessions: OrderedDict[str, tuple[float, str]] = OrderedDict()
+        self.sessions = SessionStore(
+            settings.state_file.with_suffix('.sessions.json'), settings.web_password,
+            settings.web_session_days * 86400,
+        )
         self.failures: OrderedDict[str, list[float]] = OrderedDict()
         self.lock_file = None
 
@@ -130,13 +133,20 @@ async def security(request, handler):
             if request.content_type != "application/json":
                 raise web.HTTPUnsupportedMediaType(text="Нужен application/json")
     if request.path.startswith("/api/") and request.path != "/api/login":
-        session = rt.sessions.get(request.cookies.get(COOKIE, ""))
-        if not session or session[0] < time.time():
+        token = request.cookies.get(COOKIE, "")
+        session = rt.sessions.get(token)
+        if not session:
             raise web.HTTPUnauthorized(text="Войдите в панель")
         if request.method not in ("GET", "HEAD") and not secrets.compare_digest(
-            request.headers.get("X-CSRF-Token", ""), session[1]
+            request.headers.get("X-CSRF-Token", ""), session.csrf
         ):
             raise web.HTTPForbidden(text="Неверный CSRF-токен")
+        request['session'] = session
+        renewed = request.path != '/api/logout' and await rt.sessions.renew(token)
+        response = await handler(request)
+        if renewed and rt.sessions.get(token):
+            session_cookie(request, response, token)
+        return response
     return await handler(request)
 
 
@@ -172,32 +182,19 @@ def authorize(request, password):
     rt.failures.pop(remote, None)
 
 
-def new_session(request):
-    rt = request.app[RUNTIME]
-    now = time.time()
-    for token, session in list(rt.sessions.items()):
-        if session[0] < now:
-            rt.sessions.pop(token, None)
-    rt.sessions.pop(request.cookies.get(COOKIE, ""), None)
-    token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
-    rt.sessions[token] = (now + SESSION_TTL, csrf)
-    while len(rt.sessions) > 32:
-        rt.sessions.popitem(last=False)
-    return token, csrf
-
-
 def session_cookie(request, response, token):
+    session = request.app[RUNTIME].sessions.get(token)
     response.set_cookie(COOKIE, token, httponly=True, samesite="Strict",
                         secure=request.app[RUNTIME].settings.web_secure_cookie,
-                        max_age=SESSION_TTL, path="/")
+                        max_age=max(1, int(session.expires - time.time())) if session else 0, path="/")
     return response
 
 
 async def login(request):
     data = await payload(request, LoginInput)
     authorize(request, data.password)
-    token, csrf = new_session(request)
-    return session_cookie(request, web.json_response({"csrf": csrf}), token)
+    token, session = await request.app[RUNTIME].sessions.create(request.cookies.get(COOKIE, ''))
+    return session_cookie(request, web.json_response({"csrf": session.csrf}), token)
 
 
 async def login_form(request):
@@ -215,12 +212,12 @@ async def login_form(request):
         )
         return web.Response(text=page, content_type="text/html",
                             status=exc.status if isinstance(exc, web.HTTPException) else 400)
-    token, _ = new_session(request)
+    token, _ = await request.app[RUNTIME].sessions.create(request.cookies.get(COOKIE, ''))
     return session_cookie(request, web.Response(status=303, headers={"Location": "/"}), token)
 
 
 async def logout(request):
-    request.app[RUNTIME].sessions.pop(request.cookies.get(COOKIE, ""), None)
+    await request.app[RUNTIME].sessions.revoke(request.cookies.get(COOKIE, ""))
     response = web.json_response({"ok": True})
     response.del_cookie(COOKIE, path="/")
     return response
@@ -228,14 +225,14 @@ async def logout(request):
 
 async def status(request):
     rt = request.app[RUNTIME]
-    session = rt.sessions[request.cookies[COOKIE]]
+    session = request['session']
     state = rt.store.state.to_dict()
     state.pop("subscribers", None)
     state.pop("live_message", None)
     state.update(status=rt.hunter.status.value, running=rt.hunter.running,
                  next_attempt_at=rt.hunter.next_attempt_at, current_attempt=rt.hunter.current_attempt,
                  last_error=rt.hunter.last_error, account=rt.hunter.account,
-                 connected=rt.cloud.connected, cloud=rt.credentials().describe(), csrf=session[1],
+                 connected=rt.cloud.connected, cloud=rt.credentials().describe(), csrf=session.csrf,
                  busy=rt.mutation.locked())
     def safe(value):
         if isinstance(value, str):
@@ -389,6 +386,45 @@ async def cleanup(request):
     return web.json_response({"deleted": deleted, "failed": failed})
 
 
+async def delete_ip(request):
+    rt = request.app[RUNTIME]
+    rt.idle()
+    data = await payload(request, DeleteIP)
+    found = next((f for f in rt.store.state.found
+                  if f.port_id == data.resource_id and f.kind == data.kind), None)
+    if found and found.ip != data.ip:
+        raise web.HTTPConflict(text="Адрес изменился. Обновите список перед удалением.")
+    floating = data.kind == MODE_FLOATING_IP
+    if floating:
+        resources = await rt.cloud.list_floating_ips()
+    else:
+        resources = await rt.cloud.list_ports(found.network if found else rt.store.state.settings.network)
+    resource = next((item for item in resources if item.id == data.resource_id), None)
+    if resource is None:
+        if found is None:
+            raise web.HTTPNotFound(text="Ресурс не найден. Обновите список.")
+    else:
+        label = resource.description if floating else resource.name
+        if found is None and not label.startswith(rt.store.state.settings.prefix + '-'):
+            raise web.HTTPForbidden(text="Можно удалять найденные адреса и свои пробные ресурсы")
+        if resource.ip != data.ip:
+            raise web.HTTPConflict(text="Адрес изменился. Обновите список перед удалением.")
+        attached = resource.attached if floating else bool(resource.device_id)
+        if attached:
+            raise web.HTTPConflict(text="Адрес подключён к ВМ или другому ресурсу. Сначала отвяжите его в VK Cloud.")
+        if floating:
+            await rt.cloud.delete_floating_ip(resource.id)
+        else:
+            await rt.cloud.delete_port(resource.id)
+    # Preserve history/counters; remove protection only after cloud deletion succeeded
+    # or a live cloud read proved the formerly found resource is already absent.
+    rt.store.state.found[:] = [f for f in rt.store.state.found
+                              if not (f.port_id == data.resource_id and f.kind == data.kind)]
+    await rt.store.save()
+    log.info('IP %s (%s %s) освобождён вручную', data.ip, data.kind, data.resource_id)
+    return web.json_response({'ok': True, 'ip': data.ip, 'already_absent': resource is None})
+
+
 def found_resource(rt, resource_id, kind):
     rt.idle()
     found = next((f for f in rt.store.state.found if f.port_id == resource_id and f.kind == kind), None)
@@ -469,6 +505,8 @@ async def lifecycle(app):
     rt.store.load()
     rt.secrets.load()
     try:
+        if rt.sessions.load():
+            await rt.sessions.save()
         yield
     finally:
         try:
@@ -493,7 +531,8 @@ def create_app(settings: Settings | None = None):
     for path, handler in {
         "login": login, "logout": logout, "settings": save_settings,
         "connect": connect, "disconnect": disconnect, "hunt/start": start,
-        "hunt/stop": stop, "cleanup": cleanup, "vm": create_vm, "attach": attach,
+        "hunt/stop": stop, "cleanup": cleanup, "ip/delete": delete_ip,
+        "vm": create_vm, "attach": attach,
     }.items():
         app.router.add_post("/api/" + path, handler)
     app.router.add_get("/api/state", status)

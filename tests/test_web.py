@@ -53,7 +53,7 @@ async def test_auth_csrf_and_logout(panel):
     assert state.headers['Cache-Control'] == 'no-store'
     assert (await client.post('/api/logout', json={}, headers=headers)).status == 200
     assert (await client.get('/api/state')).status == 401
-    assert not rt.sessions
+    assert not rt.sessions.records
 
 
 async def test_rate_limit_and_expired_session(panel):
@@ -64,8 +64,8 @@ async def test_rate_limit_and_expired_session(panel):
     assert (await client.post('/api/login', json={'password': PASSWORD}, headers={'X-VKH-Request': '1'})).status == 429
     rt.failures.clear()
     await authenticate(client)
-    token = next(iter(rt.sessions))
-    rt.sessions[token] = (0, 'expired')
+    session = next(iter(rt.sessions.records.values()))
+    session.expires = 0
     assert (await client.get('/api/state')).status == 401
 
 
@@ -299,3 +299,129 @@ async def test_login_origin_ports(panel, host, origin, expected):
         'X-VKH-Request': '1', 'Origin': origin, 'Host': host,
     })
     assert result.status == expected
+
+
+async def test_session_cookie_last_seven_days_and_renews(panel):
+    import time
+    client, rt = panel
+    headers = await authenticate(client)
+    session = next(iter(rt.sessions.records.values()))
+    assert session.expires > time.time() + 6 * 86400
+    session.expires -= 7200
+    old_expiry = session.expires
+    response = await client.get('/api/state')
+    assert response.status == 200
+    assert int(response.cookies[COOKIE]['max-age']) > 6 * 86400
+    assert response.cookies[COOKIE]['httponly']
+    assert session.expires > old_expiry
+    assert (await client.post('/api/hunt/stop', json={}, headers=headers)).status == 200
+
+
+async def test_session_and_csrf_survive_restart_but_logout_stays_revoked(panel, aiohttp_client):
+    client, rt = panel
+    headers = await authenticate(client)
+    token = client.session.cookie_jar.filter_cookies(client.make_url('/'))[COOKIE].value
+    await client.close()
+    restarted = await aiohttp_client(create_app(rt.settings))
+    restarted.session.cookie_jar.update_cookies({COOKIE: token}, response_url=restarted.make_url('/'))
+    response = await restarted.get('/api/state')
+    assert response.status == 200
+    assert (await response.json())['csrf'] == headers['X-CSRF-Token']
+    assert (await restarted.post('/api/logout', json={}, headers=headers)).status == 200
+    await restarted.close()
+    after_logout = await aiohttp_client(create_app(rt.settings))
+    after_logout.session.cookie_jar.update_cookies({COOKIE: token}, response_url=after_logout.make_url('/'))
+    assert (await after_logout.get('/api/state')).status == 401
+
+
+async def test_password_change_invalidates_persisted_session(panel, aiohttp_client):
+    client, rt = panel
+    await authenticate(client)
+    token = client.session.cookie_jar.filter_cookies(client.make_url('/'))[COOKIE].value
+    await client.close()
+    settings = rt.settings.model_copy(update={'web_password': 'new-long-test-password-123'})
+    restarted = await aiohttp_client(create_app(settings))
+    restarted.session.cookie_jar.update_cookies({COOKIE: token}, response_url=restarted.make_url('/'))
+    assert (await restarted.get('/api/state')).status == 401
+
+
+@pytest.mark.parametrize('kind', ['port', 'floatingip'])
+async def test_delete_found_ip_removes_resource_and_record_but_preserves_history(panel, kind):
+    client, rt = panel
+    headers = await authenticate(client)
+    cloud = rt.cloud._backend
+    found = FoundPort('found-delete', '1.2.3.4', 'an-old-prefix-found', 'internet', '1.2.3.0/24', kind=kind)
+    rt.store.state.found.append(found)
+    rt.store.state.stats.matches = 1
+    if kind == 'port':
+        cloud._ports[found.port_id] = PortInfo(found.port_id, found.name, found.ip)
+    else:
+        cloud._fips[found.port_id] = FloatingIpInfo(found.port_id, found.ip, found.name)
+    body = {'resource_id':found.port_id,'kind':kind,'ip':found.ip,'confirm':True}
+    assert (await client.post('/api/ip/delete', json=body, headers=headers)).status == 200
+    assert not rt.store.state.found and rt.store.state.stats.matches == 1
+    assert found.port_id not in cloud._ports and found.port_id not in cloud._fips
+    assert (await (await client.get('/api/state')).json())['found'] == []
+
+
+@pytest.mark.parametrize('kind', ['port', 'floatingip'])
+async def test_delete_refuses_attached_foreign_or_changed_ip_and_requires_confirmation(panel, kind):
+    client, rt = panel
+    headers = await authenticate(client)
+    cloud = rt.cloud._backend
+    prefix = rt.store.state.settings.prefix
+    if kind == 'port':
+        cloud._ports['busy'] = PortInfo('busy',prefix+'-busy','1.2.3.4',device_id='vm')
+        cloud._ports['foreign'] = PortInfo('foreign','someone-else','1.2.3.5')
+        cloud._ports['changed'] = PortInfo('changed',prefix+'-trial','1.2.3.6')
+    else:
+        cloud._fips['busy'] = FloatingIpInfo('busy','1.2.3.4',prefix+'-busy',port_id='vm')
+        cloud._fips['foreign'] = FloatingIpInfo('foreign','1.2.3.5','someone-else')
+        cloud._fips['changed'] = FloatingIpInfo('changed','1.2.3.6',prefix+'-trial')
+    rt.store.state.found.append(FoundPort('busy','1.2.3.4',prefix+'-busy','internet','1.2.3.0/24',kind=kind))
+    body = {'resource_id':'busy','kind':kind,'ip':'1.2.3.4','confirm':True}
+    assert (await client.post('/api/ip/delete', json=body, headers=headers)).status == 409
+    assert (await client.post('/api/ip/delete', json=dict(body,resource_id='foreign',ip='1.2.3.5'), headers=headers)).status == 403
+    assert (await client.post('/api/ip/delete', json=dict(body,resource_id='changed',ip='1.2.3.7'), headers=headers)).status == 409
+    assert (await client.post('/api/ip/delete', json={k:v for k,v in body.items() if k!='confirm'}, headers=headers)).status == 400
+    assert len(cloud._ports if kind=='port' else cloud._fips) == 3
+    assert rt.store.state.found
+
+
+async def test_delete_own_probe_and_already_absent_found_ip(panel):
+    client, rt = panel
+    headers = await authenticate(client)
+    cloud = rt.cloud._backend
+    prefix = rt.store.state.settings.prefix
+    cloud._fips['trial'] = FloatingIpInfo('trial','1.2.3.4',prefix+'-trial')
+    body = {'resource_id':'trial','kind':'floatingip','ip':'1.2.3.4','confirm':True}
+    assert (await client.post('/api/ip/delete', json=body, headers=headers)).status == 200
+    rt.store.state.found.append(FoundPort('missing','1.2.3.5','old-prefix','internet','1.2.3.0/24',kind='floatingip'))
+    response = await client.post('/api/ip/delete', json=dict(body,resource_id='missing',ip='1.2.3.5'), headers=headers)
+    assert response.status == 200 and (await response.json())['already_absent']
+    assert not rt.store.state.found
+
+
+async def test_delete_cloud_error_keeps_found_ip_and_requires_csrf(panel):
+    client, rt = panel
+    headers = await authenticate(client)
+    cloud = rt.cloud._backend
+    cloud._fips['found'] = FloatingIpInfo('found','1.2.3.4','probe-found')
+    rt.store.state.found.append(FoundPort('found','1.2.3.4','probe-found','internet','1.2.3.0/24',kind='floatingip'))
+    body = {'resource_id':'found','kind':'floatingip','ip':'1.2.3.4','confirm':True}
+    assert (await client.post('/api/ip/delete', json=body, headers={'X-VKH-Request':'1'})).status == 403
+    cloud.delete_floating_ip = AsyncMock(side_effect=CloudError('cloud denied deletion'))
+    assert (await client.post('/api/ip/delete', json=body, headers=headers)).status == 502
+    assert rt.store.state.found and 'found' in cloud._fips
+
+
+async def test_delete_is_blocked_while_hunting(panel):
+    client, rt = panel
+    headers = await authenticate(client)
+    rt.store.state.settings.targets = ['192.0.2.0/24']
+    await client.post('/api/hunt/start', json={}, headers=headers)
+    response = await client.post('/api/ip/delete', json={
+        'resource_id':'trial','kind':'floatingip','ip':'1.2.3.4','confirm':True,
+    }, headers=headers)
+    assert response.status == 409
+    await rt.hunter.stop(wait=True)

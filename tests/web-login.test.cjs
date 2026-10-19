@@ -220,3 +220,72 @@ test('old password query is removed without trying to log in with it',async t=>{
   assert.equal(page.calls.some(c=>c.url==='/api/login'),false);
   await ready(page);
 });
+
+
+function foundIP(){return {port_id:'found-123',kind:'floatingip',ip:'1.2.3.4',name:'old-prefix-found',network:'internet',matched_cidr:'1.2.3.0/24',found_at:1700000000};}
+function foundState(){const data=state();data.connected=true;data.found=[foundIP()];return data;}
+
+
+test('a confirmed found IP deletion sends the exact address and removes its row',async t=>{
+  const data=foundState();
+  const page=mount(t,(url,init)=>{
+    if(url==='/api/ip/delete'){
+      assert.deepEqual(JSON.parse(init.body),{resource_id:'found-123',kind:'floatingip',ip:'1.2.3.4',confirm:true});
+      assert.equal(init.headers['X-CSRF-Token'],'test-csrf');
+      data.found=[];return reply(200,{ok:true,ip:'1.2.3.4',already_absent:false});
+    }
+    return reply(200,data);
+  });
+  await until(()=>visibleApp(page));
+  let confirmation='';page.w.confirm=message=>{confirmation=message;return true;};
+  page.d.querySelector('#found-table button').click();
+  await until(()=>page.d.getElementById('notice').textContent.includes('освобождён'));
+  assert.match(confirmation,/1\.2\.3\.4/);
+  assert.match(confirmation,/вернётся в пул/);
+  assert.equal(page.d.querySelector('#found-table button'),null);
+});
+
+
+test('cancelling the IP confirmation leaves the address and sends no delete request',async t=>{
+  const page=mount(t,()=>reply(200,foundState()));await until(()=>visibleApp(page));
+  page.w.confirm=()=>false;
+  page.d.querySelector('#found-table button').click();await pause(20);
+  assert.equal(page.calls.some(c=>c.url==='/api/ip/delete'),false);
+  assert.ok(page.d.getElementById('found-table').textContent.includes('1.2.3.4'));
+});
+
+
+test('a cloud deletion error keeps the found IP visible',async t=>{
+  const page=mount(t,url=>url==='/api/ip/delete'?reply(502,{error:'Облако отказало в удалении'}):reply(200,foundState()));
+  await until(()=>visibleApp(page));page.d.querySelector('#found-table button').click();
+  await until(()=>page.d.getElementById('notice').textContent.includes('Облако отказало'));
+  assert.ok(page.d.querySelector('#found-table button'));
+  assert.equal(visibleApp(page),true);
+});
+
+
+test('cloud resource lists expose deletion for own probes and disable attached IPs',async t=>{
+  const data=state();data.connected=true;
+  const resources=[
+    {id:'own',ip:'1.2.3.4',description:'test-probe-own',port_id:''},
+    {id:'busy',ip:'1.2.3.5',description:'test-probe-busy',port_id:'vm-port'},
+    {id:'foreign',ip:'1.2.3.6',description:'another-application',port_id:''},
+  ];
+  const page=mount(t,url=>reply(200,url==='/api/cloud/floatingips'?resources:data));
+  await until(()=>visibleApp(page));
+  page.d.querySelector('[data-load=floatingips]').click();
+  await until(()=>page.d.querySelectorAll('#resource-output tbody tr').length===3);
+  const rows=page.d.querySelectorAll('#resource-output tbody tr');
+  assert.equal(rows[0].querySelector('button').disabled,false);
+  assert.equal(rows[1].querySelector('button').disabled,true);
+  assert.equal(rows[2].querySelector('button'),null);
+});
+
+
+test('deletion controls are disabled as soon as polling reports a running hunt',async t=>{
+  const data=foundState();
+  const page=mount(t,()=>reply(200,data));await until(()=>visibleApp(page));
+  assert.equal(page.d.querySelector('#found-table button').disabled,false);
+  data.running=true;data.status='running';await page.poll();
+  assert.equal(page.d.querySelector('#found-table button').disabled,true);
+});
